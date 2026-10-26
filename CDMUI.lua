@@ -1,0 +1,2210 @@
+--[[
+    CDMUI v1.0.0
+    ────────────────────────────────────────────────────────────────
+    Roblox / Luau 单文件控制面板 UI 库。零依赖，loadstring 直载。
+    本库只包含 UI 框架与通用控件，不含任何游戏逻辑。
+
+    特性：
+      · 控件：Toggle / Slider / Cycle / Input / Keybind / MultiSelect /
+              Expand / Label / Divider / Buttons
+      · 统一色阶与尺寸规范，改一处全局生效
+      · 完整动效：面板进出场、Tab 收起展开、子项逐行撑开、
+                  勾选框缩放弹出、循环按钮滑动、按钮按压回弹
+      · PC / 移动端自适应（LAYOUT 表统一管理两套尺寸）
+
+    用法：
+      local UI = loadstring(game:HttpGet(".../CDMUI.lua"))()
+
+      local win = UI.Create({ Title = "控制面板" })
+      local tab = win:Tab("基础")
+
+      tab:Toggle({
+          Key = "feature_a",
+          Title = "功能 A",
+          Desc = "说明文字",
+          Default = false,
+          Callback = function(v) print("feature_a", v) end,
+      })
+
+      tab:Slider({
+          Key = "value_b",
+          Title = "数值 B",
+          Min = 0, Max = 100, Step = 1, Default = 50,
+      })
+
+      tab:Expand({
+          Key = "group_c",
+          Title = "分组 C",
+          Desc = "可展开的子项",
+          Children = {
+              { Kind = "toggle", Key = "sub_1", Title = "子开关" },
+              { Kind = "number", Key = "sub_2", Title = "子数值", Min = 1, Max = 20, Default = 4 },
+              { Kind = "cycle",  Key = "sub_3", Title = "子选项", Options = { "A", "B" } },
+          },
+      })
+
+      tab:Buttons({
+          Buttons = {
+              { Text = "取消", Variant = "secondary" },
+              { Text = "确定", Variant = "primary", Callback = function() end },
+          },
+      })
+
+      win:Notify("已加载")
+--]]
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local SoundService = game:GetService("SoundService")
+local Debris = game:GetService("Debris")
+
+local LocalPlayer = Players.LocalPlayer
+
+local UI = {}
+UI.Version = "1.1.0"
+
+-- ============================================================
+-- 主题（与原面板一致）
+-- ============================================================
+local T = {
+    -- 面板
+    panel       = Color3.fromRGB(15, 15, 18),
+    panelStroke = Color3.fromRGB(60, 60, 70),
+
+    -- 行（主行 / 子行同一套色阶，靠明度区分层级）
+    row         = Color3.fromRGB(25, 25, 30),
+    rowHover    = Color3.fromRGB(34, 34, 41),
+    rowChild    = Color3.fromRGB(21, 21, 26),
+    childHover  = Color3.fromRGB(30, 30, 36),
+
+    -- 文字
+    text        = Color3.fromRGB(240, 240, 245),
+    textDim     = Color3.fromRGB(130, 130, 140),
+    textChild   = Color3.fromRGB(220, 220, 225),
+
+    -- Tab
+    tabIdle     = Color3.fromRGB(30, 30, 35),
+    tabActive   = Color3.fromRGB(255, 255, 255),
+    tabText     = Color3.fromRGB(220, 220, 220),
+    tabTextOn   = Color3.fromRGB(15, 15, 18),
+
+    -- 控件统一底色（勾选框 / 箭头 / 循环 / 输入框 共用同一明度基准）
+    ctrl        = Color3.fromRGB(38, 38, 45),
+    ctrlHover   = Color3.fromRGB(50, 50, 58),
+    ctrlStroke  = Color3.fromRGB(70, 70, 82),
+    ctrlText    = Color3.fromRGB(215, 215, 225),
+
+    -- 强调
+    accent      = Color3.fromRGB(255, 255, 255),
+    accentBar   = Color3.fromRGB(200, 205, 215),   -- 子行左侧竖条（浅灰，跟强调色同系但不刺眼）
+    hint        = Color3.fromRGB(150, 150, 160),
+    danger      = Color3.fromRGB(226, 96, 96),
+}
+
+-- 兼容旧字段名
+T.box        = T.ctrl
+T.boxStroke  = T.ctrlStroke
+T.arrowBg    = T.ctrl
+T.arrowHover = T.ctrlHover
+T.arrowText  = T.ctrlText
+T.cycleBg    = T.ctrl
+T.cycleHover = T.ctrlHover
+
+-- 统一尺寸规范（所有控件共用）
+local SIZE = {
+    radius     = 6,    -- 控件圆角
+    radiusRow  = 4,    -- 行圆角
+    ctrlH      = 28,   -- 控件标准高
+    arrow      = 34,   -- 展开箭头
+    checkbox   = 28,   -- 主行勾选框
+    checkboxSm = 22,   -- 子行勾选框
+}
+UI.Theme = T
+
+local FONT        = Enum.Font.Gotham
+local FONT_BOLD   = Enum.Font.GothamBold
+local FONT_BLACK  = Enum.Font.GothamBlack
+
+-- ============================================================
+-- 平台适配
+-- ============================================================
+-- 判定方式与 Roblox 官方一致：TouchEnabled 且没有键盘 → 移动端
+local IS_TOUCH = UserInputService.TouchEnabled
+local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
+
+-- 移动端：面板更宽更矮、行更高（手指点得准）、Tab 平分整行、字号加大
+local LAYOUT = {
+    panelW      = IS_MOBILE and 560 or 460,
+    panelH      = IS_MOBILE and 620 or 580,
+    rowH        = IS_MOBILE and 72 or 58,
+    titleSize   = IS_MOBILE and 34 or 30,
+    tabHeight   = IS_MOBILE and 52 or 44,
+    tabWidth    = IS_MOBILE and 0 or 88,      -- 0 = 平分整行
+    tabTextSize = IS_MOBILE and 16 or 14,
+    rowTitle    = IS_MOBILE and 16 or 14,
+    rowDesc     = IS_MOBILE and 13 or 12,
+    boxSize     = IS_MOBILE and 32 or 28,
+    inputW      = IS_MOBILE and 84 or 70,
+    inputH      = IS_MOBILE and 36 or 30,
+    btnH        = IS_MOBILE and 36 or 30,
+    btnText     = IS_MOBILE and 15 or 13,
+    hintSize    = IS_MOBILE and 14 or 13,
+    listTop     = IS_MOBILE and 146 or 130,
+    padX        = IS_MOBILE and 16 or 20,
+    padGap      = IS_MOBILE and 8 or 6,
+    childH      = IS_MOBILE and 44 or 36,
+
+    -- 控件层尺寸（移动端统一放大，手指点得准）
+    sliderW     = IS_MOBILE and 170 or 150,   -- 滑动条轨道宽
+    sliderH     = IS_MOBILE and 8 or 6,       -- 轨道高
+    knobSize    = IS_MOBILE and 18 or 14,     -- 拖柄直径
+    keybindW    = IS_MOBILE and 130 or 110,   -- 键位按钮宽
+    keybindH    = IS_MOBILE and 34 or 28,     -- 键位按钮高
+    cycleW      = IS_MOBILE and 190 or 160,   -- 循环选择宽
+    cycleH      = IS_MOBILE and 32 or 28,     -- 循环选择高
+    chipW       = IS_MOBILE and 76 or 64,     -- 多选 chip 宽
+    chipH       = IS_MOBILE and 30 or 24,     -- 多选 chip 高
+    ctrlText    = IS_MOBILE and 14 or 12,     -- 控件文字统一字号
+    arrowSize   = IS_MOBILE and 38 or 34,     -- 展开箭头
+    rowDescY    = IS_MOBILE and 34 or 30,     -- 行描述文字 Y 偏移
+    tabY        = IS_MOBILE and 84 or 74,     -- Tab 栏 Y 位置
+    tabItemW    = IS_MOBILE and 100 or 88,    -- 单个 Tab 宽
+    cycleArrowW = IS_MOBILE and 30 or 24,     -- 循环按钮两侧箭头宽
+    cycleArrowText = IS_MOBILE and 17 or 15,  -- 循环按钮箭头字号
+    arrowText   = IS_MOBILE and 16 or 14,     -- 展开箭头字号
+    subBoxSize  = IS_MOBILE and 26 or 22,     -- 子行勾选框尺寸
+
+    -- 自适应缩放边距（移动端留更多给刘海/手势区）
+    scaleMarginX = IS_MOBILE and 0.96 or 0.92,
+    scaleMarginY = IS_MOBILE and 0.88 or 0.85,
+    scaleMin     = IS_MOBILE and 0.35 or 0.45,
+    scaleMax     = IS_MOBILE and 1.25 or 1.15,
+}
+
+local PANEL_W, PANEL_H = LAYOUT.panelW, LAYOUT.panelH
+local ROW_H = LAYOUT.rowH
+
+local CLICK_SFX = "rbxassetid://8617766509"
+
+-- ============================================================
+-- 工具
+-- ============================================================
+local function mk(class, props, parent)
+    local inst = Instance.new(class)
+    if props then
+        for k, v in pairs(props) do inst[k] = v end
+    end
+    if parent then inst.Parent = parent end
+    return inst
+end
+
+local function corner(obj, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r)
+    c.Parent = obj
+    return c
+end
+
+local function stroke(obj, color, thickness, transparency)
+    local s = Instance.new("UIStroke")
+    s.Color = color
+    s.Thickness = thickness or 1
+    s.Transparency = transparency or 0
+    s.Parent = obj
+    return s
+end
+
+local function tween(inst, time, props, style, dir, delay)
+    local info = TweenInfo.new(time or 0.16,
+        style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out, 0, false, delay or 0)
+    local t = TweenService:Create(inst, info, props)
+    t:Play()
+    return t
+end
+
+local function guiParent()
+    local ok, hui = pcall(function() return gethui and gethui() end)
+    if ok and hui then return hui end
+    local ok2, core = pcall(function() return game:GetService("CoreGui") end)
+    if ok2 and core then return core end
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local function playClick()
+    pcall(function()
+        local s = Instance.new("Sound")
+        s.SoundId = CLICK_SFX
+        s.Volume = 0.5
+        s:SetAttribute("__CP_SFX", true)
+        s.Parent = SoundService
+        s:Play()
+        Debris:AddItem(s, 2)
+    end)
+end
+
+-- tap 判定：位移 < 12 才算点击（避免拖滚动条时误触）
+-- 用 pcall 包住位置运算，无头运行时里 InputObject.Position 可能不是 Vector2
+local function bindTap(btn, fn)
+    local startPos = nil
+
+    local function posOf(input)
+        local ok, p = pcall(function() return input.Position end)
+        if ok and typeof(p) == "Vector2" then return p end
+        return nil
+    end
+
+    btn.InputBegan:Connect(function(input)
+        local ut = input.UserInputType
+        if ut == Enum.UserInputType.Touch or ut == Enum.UserInputType.MouseButton1 then
+            startPos = posOf(input)
+        end
+    end)
+
+    btn.InputEnded:Connect(function(input)
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.Touch and ut ~= Enum.UserInputType.MouseButton1 then
+            return
+        end
+        local endPos = posOf(input)
+        local moved = 0
+        if startPos and endPos then
+            local ok, mag = pcall(function() return (endPos - startPos).Magnitude end)
+            if ok and type(mag) == "number" then moved = mag end
+        end
+        startPos = nil
+        if moved < 12 then fn() end
+    end)
+end
+
+local function adaptiveScale()
+    local cam = workspace.CurrentCamera
+    local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
+    local s = math.min((vs.X * LAYOUT.scaleMarginX) / PANEL_W,
+                       (vs.Y * LAYOUT.scaleMarginY) / PANEL_H)
+    return math.clamp(s, LAYOUT.scaleMin, LAYOUT.scaleMax)
+end
+
+-- ============================================================
+-- 动效层：所有动画统一从这里走，避免各控件各写一套导致闪
+-- ============================================================
+local Anim = {}
+
+-- 基础补间
+function Anim.to(inst, props, dur, style, dir, delay)
+    if not inst or not inst.Parent then return end
+    local info = TweenInfo.new(dur or 0.2, style or Enum.EasingStyle.Quad,
+        dir or Enum.EasingDirection.Out, 0, false, delay or 0)
+    local t = TweenService:Create(inst, info, props)
+    t:Play()
+    return t
+end
+
+-- 悬停反馈（颜色过渡，不改变透明度造成闪烁）
+function Anim.hover(frame, fromColor, toColor, speed)
+    if not frame then return end
+    local base = fromColor or frame.BackgroundColor3
+    local target = toColor or base
+    frame.MouseEnter:Connect(function()
+        Anim.to(frame, { BackgroundColor3 = target }, speed or 0.12)
+    end)
+    frame.MouseLeave:Connect(function()
+        Anim.to(frame, { BackgroundColor3 = base }, speed or 0.12)
+    end)
+end
+
+-- 按压回弹（缩放，不影响布局）
+function Anim.press(btn, scaleDown)
+    if not btn then return end
+    local baseSize = btn.Size
+    scaleDown = scaleDown or 0.96
+    btn.MouseButton1Down:Connect(function()
+        btn.Size = UDim2.new(
+            baseSize.X.Scale, math.floor(baseSize.X.Offset * scaleDown),
+            baseSize.Y.Scale, math.floor(baseSize.Y.Offset * scaleDown))
+    end)
+    btn.MouseButton1Up:Connect(function()
+        Anim.to(btn, { Size = baseSize }, 0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    end)
+end
+
+-- 错开序列：对一组实例依次播放
+function Anim.stagger(list, fn, interval)
+    interval = interval or 0.02
+    local delay = 0
+    for _, inst in ipairs(list) do
+        if inst and inst.Parent then
+            fn(inst, delay)
+        end
+        delay = delay + interval
+    end
+end
+
+UI.Anim = Anim
+
+-- ============================================================
+-- 触屏适配
+-- ============================================================
+function UI.ApplyTouchTweaks(gui)
+    if not IS_TOUCH then return end
+
+    local panel = gui:FindFirstChild("Panel")
+    local list = panel and panel:FindFirstChild("List")
+    if list then
+        list.ScrollBarThickness = 6
+        list.ScrollBarImageTransparency = 0.45
+        list.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
+        list.Active = true
+    end
+
+    local title = panel and panel:FindFirstChild("BigTitle")
+    if title then
+        local dragging, dragStart, startPos = false, nil, nil
+        title.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = panel.Position
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and input.UserInputType == Enum.UserInputType.Touch then
+                local delta = input.Position - dragStart
+                panel.Position = UDim2.new(0.5, startPos.X.Offset + delta.X,
+                                           0.5, startPos.Y.Offset + delta.Y)
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+    end
+end
+
+-- ============================================================
+-- 控件工厂（统一主题）
+-- ============================================================
+
+-- 勾选框（原版方块样式 + 弹动动画）
+local function makeCheckbox(parent, size, rightOffset, onChange)
+    local hit = mk("TextButton", {
+        Name = "CheckHit",
+        Size = UDim2.new(0, size + 16, 0, size + 16),
+        Position = UDim2.new(1, rightOffset - (size + 16), 0.5, -(size + 16) / 2),
+        BackgroundTransparency = 1,
+        Text = "",
+        ZIndex = 20,
+        AutoButtonColor = false,
+        Active = true,
+    }, parent)
+
+    local box = mk("Frame", {
+        Name = "Box",
+        Size = UDim2.new(0, size, 0, size),
+        Position = UDim2.new(0.5, -size / 2, 0.5, -size / 2),
+        BackgroundColor3 = T.box,
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        ZIndex = 5,
+        Active = false,
+    }, hit)
+    corner(box, 4)
+    local st = stroke(box, T.boxStroke, 1, 0.3)
+
+    -- 对勾用文字字形（Gotham 支持 ✓）
+    local mark = mk("TextLabel", {
+        Name = "Mark",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "✓",
+        TextColor3 = T.tabTextOn,
+        Font = FONT_BOLD,
+        TextSize = math.floor(size * 0.85),
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        Visible = false,
+        ZIndex = 6,
+        Active = false,
+    }, box)
+    local value = false
+
+    local function render(animated)
+        if value then
+            -- 勾选：底色渐白 + 对勾从 0 缩放弹出
+            if animated then
+                Anim.to(box, { BackgroundColor3 = T.accent, BackgroundTransparency = 0 }, 0.14)
+                Anim.to(st, { Transparency = 1 }, 0.14)
+                mark.Visible = true
+                mark.TextTransparency = 0
+                mark.Size = UDim2.fromScale(0.2, 0.2)
+                mark.Position = UDim2.fromScale(0.5, 0.5)
+                local t = tween(mark, 0.22, {
+                    Size = UDim2.fromScale(1, 1),
+                    Position = UDim2.fromScale(0, 0),
+                }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            else
+                box.BackgroundColor3 = T.accent
+                box.BackgroundTransparency = 0
+                st.Transparency = 1
+                mark.Visible = true
+                mark.TextTransparency = 0
+                mark.Size = UDim2.fromScale(1, 1)
+                mark.Position = UDim2.fromScale(0, 0)
+            end
+        else
+            -- 取消：对勾缩回消失 + 底色恢复
+            if animated then
+                Anim.to(box, { BackgroundColor3 = T.ctrl, BackgroundTransparency = 0.15 }, 0.14)
+                Anim.to(st, { Transparency = 0.35 }, 0.14)
+                tween(mark, 0.12, {
+                    Size = UDim2.fromScale(0.2, 0.2),
+                    Position = UDim2.fromScale(0.5, 0.5),
+                    TextTransparency = 1,
+                }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                task.delay(0.13, function()
+                    if not value and mark then
+                        mark.Visible = false
+                        mark.Size = UDim2.fromScale(1, 1)
+                        mark.Position = UDim2.fromScale(0, 0)
+                    end
+                end)
+            else
+                box.BackgroundColor3 = T.ctrl
+                box.BackgroundTransparency = 0.15
+                st.Transparency = 0.35
+                mark.Visible = false
+                mark.TextTransparency = 1
+            end
+        end
+    end
+    hit.MouseEnter:Connect(function()
+        if not value then tween(box, 0.12, { BackgroundColor3 = T.rowHover }) end
+    end)
+    hit.MouseLeave:Connect(function()
+        if not value then tween(box, 0.12, { BackgroundColor3 = T.box }) end
+    end)
+
+    -- 按压回弹
+    hit.MouseButton1Down:Connect(function()
+        tween(box, 0.06, { Size = UDim2.new(0, size - 3, 0, size - 3),
+                           Position = UDim2.new(0.5, -(size - 3) / 2, 0.5, -(size - 3) / 2) })
+    end)
+    hit.MouseButton1Up:Connect(function()
+        tween(box, 0.1, { Size = UDim2.new(0, size, 0, size),
+                          Position = UDim2.new(0.5, -size / 2, 0.5, -size / 2) }, Enum.EasingStyle.Back)
+    end)
+
+    bindTap(hit, function()
+        value = not value
+        render(true)
+        playClick()
+        if onChange then onChange(value) end
+    end)
+
+    return {
+        Set = function(v, silent)
+            value = v and true or false
+            render(true)
+            if not silent and onChange then onChange(value) end
+        end,
+        Get = function() return value end,
+        SetSilent = function(v)
+            value = v and true or false
+            render(false)
+        end,
+    }
+end
+
+-- 统一按钮：primary / secondary / danger / ghost
+local function makeButton(parent, cfg)
+    local variant = cfg.Variant or "secondary"
+    local w = cfg.Width or 88
+    local h = cfg.Height or 30
+
+    local bg, bgHover, fg, border
+    if variant == "primary" then
+        bg, bgHover, fg, border = T.tabActive, Color3.fromRGB(235, 235, 240), T.tabTextOn, nil
+    elseif variant == "danger" then
+        bg, bgHover, fg, border = Color3.fromRGB(42, 22, 24), Color3.fromRGB(58, 28, 30), T.danger, Color3.fromRGB(80, 38, 40)
+    elseif variant == "ghost" then
+        bg, bgHover, fg, border = T.panel, T.row, T.textDim, T.panelStroke
+    else
+        bg, bgHover, fg, border = T.tabIdle, T.rowHover, T.tabText, T.panelStroke
+    end
+
+    local btn = mk("TextButton", {
+        Name = "Btn_" .. tostring(cfg.Text or cfg.Name or ""),
+        Size = UDim2.new(0, w, 0, h),
+        BackgroundColor3 = bg,
+        BorderSizePixel = 0,
+        Text = cfg.Text or cfg.Name or "按钮",
+        Font = FONT_BOLD,
+        TextSize = 13,
+        TextColor3 = fg,
+        AutoButtonColor = false,
+        ZIndex = 6,
+        Active = true,
+    }, parent)
+    corner(btn, 6)
+    if border then stroke(btn, border, 1, 0.35) end
+
+    btn.MouseEnter:Connect(function() tween(btn, 0.12, { BackgroundColor3 = bgHover }) end)
+    btn.MouseLeave:Connect(function() tween(btn, 0.12, { BackgroundColor3 = bg }) end)
+    btn.MouseButton1Down:Connect(function()
+        tween(btn, 0.06, { Size = UDim2.new(0, w - 2, 0, h - 2) })
+    end)
+    btn.MouseButton1Up:Connect(function()
+        tween(btn, 0.1, { Size = UDim2.new(0, w, 0, h) }, Enum.EasingStyle.Back)
+    end)
+    bindTap(btn, function()
+        playClick()
+        if cfg.Callback then cfg.Callback() end
+    end)
+
+    return btn
+end
+
+-- 数字输入（统一主题，替代原版突兀的蓝灰快捷按钮）
+local function makeNumberInput(parent, cfg, onChange)
+    local holder = mk("Frame", {
+        Name = "NumInput",
+        Size = UDim2.new(0, LAYOUT.inputW, 0, LAYOUT.inputH),
+        Position = UDim2.new(1, cfg.RightOffset or -230, 0.5, -15),
+        BackgroundColor3 = T.box,
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        ZIndex = 20,
+    }, parent)
+    corner(holder, 4)
+    local st = stroke(holder, T.boxStroke, 1, 0.3)
+
+    local box = mk("TextBox", {
+        Name = "Input",
+        Size = UDim2.new(1, -8, 1, 0),
+        Position = UDim2.new(0, 4, 0, 0),
+        BackgroundTransparency = 1,
+        Text = tostring(cfg.Default or ""),
+        TextColor3 = T.text,
+        Font = FONT,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        ClearTextOnFocus = false,
+        ZIndex = 21,
+    }, holder)
+
+    local function commit()
+        local v = tonumber(box.Text)
+        if v then
+            if cfg.Min then v = math.max(cfg.Min, v) end
+            if cfg.Max then v = math.min(cfg.Max, v) end
+            box.Text = tostring(v)
+            if onChange then onChange(v) end
+        else
+            box.Text = tostring(cfg.Default or "")
+        end
+    end
+
+    if box.Focused then
+        box.Focused:Connect(function()
+            tween(st, 0.12, { Color = T.accent, Transparency = 0 })
+        end)
+    end
+    box.FocusLost:Connect(function()
+        tween(st, 0.12, { Color = T.boxStroke, Transparency = 0.3 })
+        commit()
+    end)
+
+    -- 快捷值：统一成 ghost 变体，跟主题一致
+    if cfg.Quick then
+        local qw, gap = 46, 4
+        local startX = (cfg.RightOffset or -230) + 70 + 6
+        for i, v in ipairs(cfg.Quick) do
+            local qb = makeButton(parent, {
+                Text = tostring(v),
+                Variant = "ghost",
+                Width = qw,
+                Height = 30,
+                Callback = function()
+                    box.Text = tostring(v)
+                    if onChange then onChange(v) end
+                end,
+            })
+            qb.Position = UDim2.new(1, startX + (i - 1) * (qw + gap), 0.5, -15)
+        end
+    end
+
+    return {
+        Set = function(v) box.Text = tostring(v) end,
+        Get = function() return tonumber(box.Text) end,
+    }
+end
+
+-- 循环选择：原版子项用 110x26 蓝紫底，这里统一主题但保留足够宽度
+-- 移动端再加宽加大，保证手指点得到两侧箭头
+local function makeCycle(parent, options, index, onChange)
+    index = index or 1
+    local w = LAYOUT.cycleW
+    local h = LAYOUT.cycleH
+    local arrowW = LAYOUT.cycleArrowW
+
+    local holder = mk("Frame", {
+        Name = "Cycle",
+        Size = UDim2.new(0, w, 0, h),
+        Position = UDim2.new(1, -(w + 8), 0.5, -h / 2),
+        BackgroundColor3 = T.box,
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        ZIndex = 20,
+        Active = true,
+    }, parent)
+    corner(holder, 5)
+    stroke(holder, T.boxStroke, 1, 0.3)
+
+    local left = mk("TextButton", {
+        Name = "Prev",
+        Size = UDim2.fromOffset(arrowW, h),
+        BackgroundTransparency = 1,
+        Text = "<",
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.cycleArrowText,
+        TextColor3 = T.textDim,
+        AutoButtonColor = false,
+        ZIndex = 21,
+        Active = true,
+    }, holder)
+
+    local label = mk("TextLabel", {
+        Name = "Label",
+        Size = UDim2.new(1, -arrowW * 2, 1, 0),
+        Position = UDim2.fromOffset(arrowW, 0),
+        BackgroundTransparency = 1,
+        Font = FONT,
+        Text = tostring(options[index] or ""),
+        TextSize = LAYOUT.ctrlText,
+        TextColor3 = T.text,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 21,
+        Active = false,
+    }, holder)
+
+    local right = mk("TextButton", {
+        Name = "Next",
+        Size = UDim2.fromOffset(arrowW, h),
+        Position = UDim2.new(1, -arrowW, 0, 0),
+        BackgroundTransparency = 1,
+        Text = ">",
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.cycleArrowText,
+        TextColor3 = T.textDim,
+        AutoButtonColor = false,
+        ZIndex = 21,
+        Active = true,
+    }, holder)
+
+    local function apply(delta)
+        index = ((index - 1 + delta) % #options) + 1
+        -- 文字横向滑出 → 切换 → 从另一侧滑入
+        local outX = delta > 0 and -10 or 10
+        local inX = -outX
+        local basePos = UDim2.fromOffset(arrowW, 0)
+        tween(label, 0.1, {
+            Position = UDim2.new(0, arrowW + outX, 0.5, -6),
+            TextTransparency = 1,
+        }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        task.delay(0.1, function()
+            if not label or not label.Parent then return end
+            label.Text = tostring(options[index])
+            label.Position = UDim2.new(0, arrowW + inX, 0.5, 6)
+            tween(label, 0.16, {
+                Position = basePos,
+                TextTransparency = 0,
+            }, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        end)
+        playClick()
+        if onChange then onChange(options[index], index) end
+    end
+
+    bindTap(left, function() apply(-1) end)
+    bindTap(right, function() apply(1) end)
+    left.MouseEnter:Connect(function() tween(left, 0.1, { TextColor3 = T.text }) end)
+    left.MouseLeave:Connect(function() tween(left, 0.1, { TextColor3 = T.textDim }) end)
+    right.MouseEnter:Connect(function() tween(right, 0.1, { TextColor3 = T.text }) end)
+    right.MouseLeave:Connect(function() tween(right, 0.1, { TextColor3 = T.textDim }) end)
+
+    return {
+        Set = function(v)
+            for i, o in ipairs(options) do
+                if o == v then index = i break end
+            end
+            label.Text = tostring(options[index])
+        end,
+        Get = function() return options[index], index end,
+    }
+end
+-- ============================================================
+-- 窗口
+-- ============================================================
+local Window = {}
+Window.__index = Window
+local Tab = {}
+Tab.__index = Tab
+
+-- 顶栏按钮：
+--   样式 = 游戏自带按钮（18,18,21 深色 + 圆角胶囊 + 白字）
+--   字号 = 原版 16 + GothamMedium
+--   放进 TopbarStandard.Holders.Left 后，Roblox 平台会自动给悬停气泡提示
+local GAME_BTN_BG      = Color3.fromRGB(18, 18, 21)
+local GAME_BTN_TRANS   = 0.08
+local GAME_BTN_HOVER   = 0.30
+
+local function createTopbarButton(self, labelText)
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return end
+
+    local topbar = playerGui:FindFirstChild("TopbarStandard")
+    local holders = topbar and topbar:FindFirstChild("Holders")
+    local left = holders and holders:FindFirstChild("Left")
+    if not left then return end
+
+    local text = labelText or "控制面板"
+
+    -- 宽度照原版：90x44
+    local widgetW = 90
+
+    local widget = mk("Frame", {
+        Name = "CDMUIWidget",
+        Size = UDim2.new(0, widgetW, 0, 44),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 20,
+        LayoutOrder = 90,
+    }, left)
+
+    -- 外圈：游戏自带同款深色底（hover 时不变）
+    local bg = mk("Frame", {
+        Name = "IconButton",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = GAME_BTN_BG,
+        BackgroundTransparency = GAME_BTN_TRANS,
+        BorderSizePixel = 0,
+        ZIndex = 2,
+    }, widget)
+    corner(bg, 999)
+
+    -- 内圈：hover 时这个变白（游戏自带行为）
+    local iconSpot = mk("Frame", {
+        Name = "IconSpot",
+        Size = UDim2.new(1, -8, 1, -8),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = Color3.fromRGB(225, 225, 230),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 4,
+    }, bg)
+    corner(iconSpot, 999)
+
+    local hover = mk("Frame", {
+        Name = "IconOverlay",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BackgroundTransparency = 0.85,
+        BorderSizePixel = 0,
+        Visible = false,
+        ZIndex = 5,
+    }, iconSpot)
+    corner(hover, 999)
+
+    -- 文字：原版 16 / GothamMedium
+    mk("TextLabel", {
+        Name = "IconLabel",
+        Size = UDim2.new(1, -8, 1, 0),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 16,
+        Font = Enum.Font.GothamMedium,
+        TextWrapped = false,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        ZIndex = 10,
+    }, iconSpot)
+    local click = mk("TextButton", {
+        Name = "ClickRegion",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 20,
+        Active = true,
+    }, iconSpot)
+    corner(click, 999)
+
+    -- 游戏自带行为：只有内圈变白，外圈不动
+    local function setHover(on)
+        if on then
+            iconSpot.BackgroundTransparency = 0.7
+            hover.Visible = true
+        else
+            iconSpot.BackgroundTransparency = 1
+            hover.Visible = false
+        end
+    end
+
+    click.MouseEnter:Connect(function() setHover(true) end)
+    click.MouseLeave:Connect(function() setHover(false) end)
+
+    -- 暴露给 Window：关闭面板 / 鼠标离开窗口时强制清掉高亮，
+    -- 否则面板关掉后顶栏按钮会卡在白色状态
+    self.TopbarResetHover = function()
+        setHover(false)
+    end
+
+    bindTap(click, function()
+        playClick()
+        self:SetVisible(not self.Visible)
+    end)
+
+    self.TopbarButton = widget
+    return widget
+end
+-- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
+local function bindShieldClose(self)
+    self.Shield.MouseButton1Click:Connect(function()
+        local mp = UserInputService:GetMouseLocation()
+        local ap = self.Panel.AbsolutePosition
+        local asz = self.Panel.AbsoluteSize
+        if mp.X >= ap.X and mp.X <= ap.X + asz.X
+            and mp.Y >= ap.Y and mp.Y <= ap.Y + asz.Y then
+            return
+        end
+        self:SetVisible(false)
+    end)
+end
+-- 自清理：销毁上一次加载留下的所有实例（GUI + 顶栏按钮），避免重复加载时叠影子
+local function purgePrevious()
+    local removed = 0
+
+    -- 1) CoreGui / PlayerGui 下的面板
+    local ok, hui = pcall(function() return gethui and gethui() end)
+    local containers = {}
+    if ok and hui then containers[#containers + 1] = hui end
+    local ok2, core = pcall(function() return game:GetService("CoreGui") end)
+    if ok2 and core then containers[#containers + 1] = core end
+    local pg = nil
+    pcall(function()
+        local candidate = LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui")
+        if candidate then pg = candidate end
+    end)
+    if typeof(pg) == "Instance" then containers[#containers + 1] = pg else pg = nil end
+
+    for _, container in ipairs(containers) do
+        if typeof(container) == "Instance" then
+            pcall(function()
+                for _, d in ipairs(container:GetDescendants()) do
+                    if d and (d.Name == "ControlPanelUI" or d.Name == "CDMUIRoot") then
+                        d:Destroy()
+                        removed = removed + 1
+                    end
+                end
+            end)
+        end
+    end
+
+    -- 2) 各顶栏的 Widget
+    if typeof(pg) == "Instance" then
+        for _, tbName in ipairs({ "TopbarStandard", "TopbarCentered", "TopbarStandardClipped", "TopbarCenteredClipped" }) do
+            local tb = pg:FindFirstChild(tbName)
+            local holders = tb and tb:FindFirstChild("Holders")
+            if holders then
+                for _, side in ipairs(holders:GetChildren()) do
+                    for _, c in ipairs(side:GetChildren()) do
+                        if c.Name == "CDMUIWidget" or c.Name == "ControlPanelBtn" or c.Name == "CDMUIButton" then
+                            pcall(function() c:Destroy() end)
+                            removed = removed + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return removed
+end
+function UI.Create(opts)
+    opts = opts or {}
+    purgePrevious()
+    local self = setmetatable({}, Window)
+    self.Title = opts.Title or "控制面板"
+    self.ToggleKey = opts.ToggleKey   -- nil = 不注册快捷键（避免和游戏按键冲突）
+    self.Hint = opts.Hint or "点击边界之外以关闭"
+    self.Tabs = {}
+    self.State = {}
+    self.ExpandRestorers = {}
+    self.Rows = {}
+    self.Connections = {}
+    self.Visible = false
+    self.TabIndex = 1
+    self.Destroyed = false
+
+    local gui = mk("ScreenGui", {
+        Name = opts.GuiName or "ControlPanelUI",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        DisplayOrder = opts.DisplayOrder or 101,
+        Enabled = false,
+    }, guiParent())
+    self.Gui = gui
+
+    -- 自适应缩放（原版做法）
+    local scale = mk("UIScale", { Scale = adaptiveScale() }, gui)
+    self.Scale = scale
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam and cam.GetPropertyChangedSignal then
+            table.insert(self.Connections, cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+                scale.Scale = adaptiveScale()
+            end))
+        end
+    end)
+
+    -- 点击遮罩：必须在面板之下（ZIndex 1 < 面板 2），且要判断点击是否真的在面板外
+    local shield = mk("TextButton", {
+        Name = "Shield",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 1,
+        Active = true,
+    }, gui)
+    self.Shield = shield
+
+    -- 主面板
+    local panel = mk("Frame", {
+        Name = "Panel",
+        Size = UDim2.new(0, PANEL_W, 0, PANEL_H),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        BackgroundColor3 = T.panel,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        ZIndex = 2,
+        Active = true,
+    }, gui)
+    corner(panel, 8)
+    stroke(panel, T.panelStroke, 1, 0.5)
+    self.Panel = panel
+
+    -- 大标题
+    local bigTitle = mk("TextLabel", {
+        Name = "BigTitle",
+        Size = UDim2.new(1, 0, 0, 56),
+        Position = UDim2.new(0, 0, 0, 8),
+        BackgroundTransparency = 1,
+        Text = self.Title,
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = FONT_BLACK,
+        TextSize = LAYOUT.titleSize,
+        ZIndex = 3,
+    }, panel)
+
+    -- Tab 栏
+    local tabBar = mk("Frame", {
+        Name = "TabBar",
+        Size = UDim2.new(1, -LAYOUT.padX * 2, 0, LAYOUT.tabHeight),
+        Position = UDim2.new(0, LAYOUT.padX, 0, LAYOUT.tabY),
+        BackgroundTransparency = 1,
+        ZIndex = 3,
+    }, panel)
+
+    self.TabBar = tabBar
+    -- 布局尺寸变化后重新等分（首次 AbsoluteSize 可能为 0）
+    table.insert(self.Connections, tabBar:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        self:LayoutTabs()
+    end))
+
+    -- 列表
+    local list = mk("ScrollingFrame", {
+        Name = "List",
+        Size = UDim2.new(1, -LAYOUT.padX * 2, 1, -200),
+        Position = UDim2.new(0, LAYOUT.padX, 0, LAYOUT.listTop),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 3,
+        ScrollBarThickness = 4,
+        ScrollBarImageColor3 = Color3.fromRGB(100, 100, 110),
+        ScrollBarImageTransparency = 0.3,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+        Active = true,
+    }, panel)
+    local pad = mk("UIPadding", {
+        PaddingTop = UDim.new(0, 2),
+        PaddingBottom = UDim.new(0, 8),
+        PaddingRight = UDim.new(0, 0),
+    }, list)
+    mk("UIListLayout", {
+        FillDirection = Enum.FillDirection.Vertical,
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, list)
+    self.List = list
+
+    -- 底部提示
+    local hint = mk("TextLabel", {
+        Name = "Hint",
+        Size = UDim2.new(1, 0, 0, 24),
+        Position = UDim2.new(0, 0, 1, -30),
+        BackgroundTransparency = 1,
+        Text = self.Hint,
+        TextColor3 = T.hint,
+        Font = FONT,
+        TextSize = LAYOUT.hintSize,
+        ZIndex = 3,
+    }, panel)
+
+    -- 快捷键（仅在显式传了 ToggleKey 时注册，避免和游戏按键冲突）
+    if self.ToggleKey then
+        table.insert(self.Connections, UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then return end
+            if input.KeyCode == self.ToggleKey then
+                self:SetVisible(not self.Visible)
+            end
+        end))
+    end
+    -- 进场初始态
+    panel.Size = UDim2.new(0, PANEL_W * 0.94, 0, PANEL_H * 0.94)
+    panel.BackgroundTransparency = 1
+
+    bindShieldClose(self)
+
+    -- 左上角按钮（AutoOpen=false 时用）
+    if opts.TopbarButton ~= false then
+        pcall(createTopbarButton, self, opts.TopbarText)
+    end
+
+    -- 触屏适配（仅移动端生效）
+    pcall(UI.ApplyTouchTweaks, gui)
+
+    -- 默认直接显示（原版是点顶栏按钮才弹，这里给个 AutoOpen 选项）
+    if opts.AutoOpen ~= false then
+        self:SetVisible(true, true)
+    end
+
+    return self
+end
+
+-- 面板进出场：
+--   不再从 BackgroundTransparency = 1 起步（那会让面板变透明、游戏画面透出来）
+--   改用「缩放 + 位移 + 轻微淡化」，底色始终存在，观感干净
+function Window:SetVisible(visible, instant)
+    if self.Destroyed then return end
+
+    -- 只在真正的开关切换时播音效（instant 用于初始化，不播）
+    if not instant and self.Visible ~= (visible and true or false) then
+        playClick()
+    end
+
+    self.Visible = visible and true or false
+    local panel = self.Panel
+
+    -- 顶栏按钮高亮复位：面板开关后鼠标可能已不在按钮上，MouseLeave 不会触发
+    if self.TopbarResetHover then
+        pcall(self.TopbarResetHover)
+    end
+
+    local BASE_TRANS = 0.05   -- 正常态
+    local FADE_TRANS = 0.35   -- 动画中间态（不完全透明）
+
+    if self.Visible then
+        self.Gui.Enabled = true
+
+        if instant then
+            panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+            panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+            panel.BackgroundTransparency = BASE_TRANS
+            return
+        end
+
+        -- 起点：略小、略下、略淡（但仍有底色）
+        panel.Position = UDim2.new(0.5, 0, 0.5, 18)
+        panel.Size = UDim2.new(0, PANEL_W * 0.97, 0, PANEL_H * 0.97)
+        panel.BackgroundTransparency = FADE_TRANS
+
+        Anim.to(panel, {
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0, PANEL_W, 0, PANEL_H),
+            BackgroundTransparency = BASE_TRANS,
+        }, 0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+    else
+        if instant then
+            self.Gui.Enabled = false
+            return
+        end
+
+        Anim.to(panel, {
+            Position = UDim2.new(0.5, 0, 0.5, 12),
+            Size = UDim2.new(0, PANEL_W * 0.98, 0, PANEL_H * 0.98),
+            BackgroundTransparency = FADE_TRANS,
+        }, 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+        task.delay(0.16, function()
+            if not self.Visible and self.Gui then
+                self.Gui.Enabled = false
+                -- 复位，保证下次进场从干净状态开始
+                self.Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+                self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+                self.Panel.BackgroundTransparency = BASE_TRANS
+            end
+        end)
+    end
+end
+function Window:Toggle()
+    self:SetVisible(not self.Visible)
+end
+
+function Window:Tab(name)
+    local tab = setmetatable({}, Tab)
+    tab.Window = self
+    tab.Name = name
+    tab.Items = 0
+    tab.Rows = {}
+    tab.Widgets = {}
+    tab.Container = self.List
+
+    table.insert(self.Tabs, tab)
+    local tabIndex = #self.Tabs
+
+    -- Tab 按钮：等分整行，不依赖固定宽度（Tab 数量变化也不会错位）
+    local btn = mk("TextButton", {
+        Name = "Tab_" .. name,
+        Size = UDim2.new(0, 88, 1, 0),
+        BackgroundColor3 = T.tabIdle,
+        Text = name,
+        TextColor3 = T.tabText,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.tabTextSize,
+        Active = true,
+        AutoButtonColor = false,
+        LayoutOrder = tabIndex,
+        ZIndex = 4,
+    }, self.TabBar)
+    corner(btn, 6)
+
+    tab.Button = btn
+
+    btn.MouseEnter:Connect(function()
+        if self.TabIndex ~= tabIndex then
+            tween(btn, 0.12, { BackgroundColor3 = T.rowHover })
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        if self.TabIndex ~= tabIndex then
+            tween(btn, 0.12, { BackgroundColor3 = T.tabIdle })
+        end
+    end)
+    bindTap(btn, function()
+        playClick()
+        self:SelectTab(tabIndex)
+    end)
+
+    self:LayoutTabs()
+
+    -- 布局就绪后重算一次（AbsoluteSize 在创建瞬间可能还是 0）
+    task.defer(function()
+        if not self.Destroyed then self:LayoutTabs() end
+    end)
+
+    if tabIndex == 1 then
+        self:SelectTab(1, true)
+    end
+    return tab
+end
+
+-- Tab 宽度：按 Tab 数量平分整行，铺满且不换行
+--   Tab 栏宽 = 面板宽 - padX*2，间距 = 6
+--   每个 Tab = (栏宽 - 间距*(n-1)) / n
+function Window:LayoutTabs()
+    local n = #self.Tabs
+    if n == 0 then return end
+
+    local GAP = 6
+    -- AbsoluteSize 是缩放后的像素；尺寸设置走未缩放坐标系，所以要除掉 UIScale
+    local sc = (self.Scale and self.Scale.Scale) or 1
+    if sc <= 0 then sc = 1 end
+    local barW = self.TabBar.AbsoluteSize.X / sc
+    if barW <= 10 then
+        barW = PANEL_W - LAYOUT.padX * 2
+    end
+
+    local each = math.floor((barW - GAP * (n - 1)) / n)
+    each = math.max(48, each)
+
+    -- 手动定位（不再依赖 UIListLayout，避免它按内容宽度反算导致溢出）
+    for i, t in ipairs(self.Tabs) do
+        t.Button.Size = UDim2.new(0, each, 1, 0)
+        t.Button.Position = UDim2.new(0, (i - 1) * (each + GAP), 0, 0)
+        t.Button.LayoutOrder = i
+    end
+
+    self._tabBarW = barW
+    self._tabEachW = each
+end
+-- ============================================================
+-- Tab 切换：整体朝滚动区顶部收 / 从顶部展开
+-- ============================================================
+-- 关键约束：
+--   1) 子项在 ScrollingFrame + UIListLayout 下，只能用 Size 动画（Position 会被布局覆盖）
+--   2) 高度变化会重算 CanvasSize，若 CanvasPosition=0 则内容始终贴着顶部，观感正确
+--   3) 不要手动冻结 AutomaticCanvasSize，容易算出错误的画布高度
+--   4) 滚动位置只在「旧页已完全收起」的瞬间归零，避免可见跳变
+function Window:SelectTab(index, instant)
+    local tab = self.Tabs[index]
+    if not tab then return end
+    local last = self.TabIndex
+    self.TabIndex = index
+
+    -- 保证 Tab 宽度始终是「平分整行」，防止被其他逻辑覆盖
+    self:LayoutTabs()
+
+    -- Tab 按钮状态
+    for i, t in ipairs(self.Tabs) do
+        local active = (i == index)
+        tween(t.Button, 0.18, {
+            BackgroundColor3 = active and T.tabActive or T.tabIdle,
+            TextColor3 = active and T.tabTextOn or T.tabText,
+        }, Enum.EasingStyle.Quad)
+    end
+
+    -- 记录行原始高度
+    local function rememberBase(w)
+        if not w:GetAttribute("__baseH") or w:GetAttribute("__baseH") <= 0 then
+            w:SetAttribute("__baseH", w.Size.Y.Offset)
+        end
+        return w:GetAttribute("__baseH")
+    end
+
+    -- 把某页所有行恢复为「完整高度 + 可见」或「0 高度 + 隐藏」
+    local function setPage(t, visible)
+        for _, w in ipairs(t.Widgets) do
+            if w and w.Parent and w.Name ~= "ChildRow" then
+                local base = rememberBase(w)
+                w.Visible = visible
+                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, visible and base or 0)
+                if w.Name == "Row" then
+                    w.BackgroundTransparency = 0.15
+                end
+            end
+        end
+        -- 子行：当前页按展开状态恢复，非当前页一律立即隐藏（不占位）
+        for _, r in ipairs(self.ExpandRestorers) do
+            if r.tab == t and r.apply then
+                if visible then
+                    r.apply(r.get() == true, false)
+                else
+                    r.apply(false, false)
+                end
+            end
+        end
+    end
+
+    local oldTab = self.Tabs[last]
+
+    -- 首次 / 瞬间切换：直接完成
+    if instant or last == index or not oldTab then
+        for i, t in ipairs(self.Tabs) do
+            setPage(t, i == index)
+        end
+        self.List.CanvasPosition = Vector2.new(0, 0)
+        return
+    end
+
+    -- 提速：收起 0.12s / 展开 0.18s，错开更小，减少等待感
+    local COLLAPSE_TIME = 0.12
+    local EXPAND_TIME = 0.18
+    local STAGGER_OUT = 0.006
+    local STAGGER_IN = 0.010
+
+    -- 收集旧页可见行
+    local oldRows = {}
+    for _, w in ipairs(oldTab.Widgets) do
+        if w and w.Parent and w.Visible and w:IsA("Frame") then
+            rememberBase(w)
+            table.insert(oldRows, w)
+        end
+    end
+
+    -- ===== 1) 收起：所有行高度 → 0（越靠下越早收，形成向上吸走） =====
+    for idx, w in ipairs(oldRows) do
+        local fromBottom = (#oldRows - idx) * STAGGER_OUT
+        Anim.to(w, {
+            Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0),
+        }, COLLAPSE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In, fromBottom)
+    end
+
+    -- ===== 2) 收起完成 → 切页 → 展开 =====
+    task.delay(COLLAPSE_TIME + #oldRows * STAGGER_OUT + 0.04, function()
+        if self.Destroyed or self.TabIndex ~= index then return end
+
+        -- 旧页彻底归零并隐藏
+        setPage(oldTab, false)
+
+        -- 此时旧页已不可见，把滚动位置归零不会产生可见跳变
+        self.List.CanvasPosition = Vector2.new(0, 0)
+
+        -- 新页：先全部 0 高度 + 可见，再逐行撑开
+        local newRows = {}
+        for _, w in ipairs(tab.Widgets) do
+            if w and w.Parent and w.Name ~= "ChildRow" then
+                local base = rememberBase(w)
+                w.Visible = true
+                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
+                if w.Name == "Row" then
+                    w.BackgroundTransparency = 0.15
+                end
+                table.insert(newRows, w)
+            end
+        end
+
+        -- 主行按顺序撑开；展开中的子行紧跟在各自父行之后开始，
+        -- 形成「主行 -> 子行」连贯的展开流
+        local restorers = {}
+        for _, r in ipairs(self.ExpandRestorers) do
+            if r.tab == tab then
+                table.insert(restorers, r)
+            end
+        end
+
+        local showDelay = 0
+        for idx, w in ipairs(newRows) do
+            local base = w:GetAttribute("__baseH") or 0
+            Anim.to(w, {
+                Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base),
+            }, EXPAND_TIME, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, showDelay)
+
+            showDelay = showDelay + STAGGER_IN
+
+            -- 这一行如果有展开项且处于展开状态，让它比主行晚 0.06s 开始撑开
+            local title = w:FindFirstChild("Title")
+            if title then
+                for _, r in ipairs(restorers) do
+                    if r.get() == true and r.apply and r.panelRow == w then
+                        r.apply(true, true, showDelay + 0.06)
+                    end
+                end
+            end
+        end
+    end)
+end
+function Window:Notify(text, duration)
+    if self.Destroyed then return end
+    duration = duration or 2.4
+    local toast = mk("Frame", {
+        Name = "Toast",
+        Size = UDim2.new(0, 220, 0, 36),
+        Position = UDim2.new(0.5, 110, 1, -90),
+        BackgroundColor3 = T.row,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        ZIndex = 40,
+    }, self.Panel)
+    corner(toast, 6)
+    stroke(toast, T.panelStroke, 1, 0.3)
+
+    mk("TextLabel", {
+        Size = UDim2.new(1, -20, 1, 0),
+        Position = UDim2.fromOffset(10, 0),
+        BackgroundTransparency = 1,
+        Font = FONT,
+        Text = text,
+        TextSize = 13,
+        TextColor3 = T.text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    }, toast)
+
+    toast.Position = UDim2.new(0.5, 130, 1, -90)
+    tween(toast, 0.22, { Position = UDim2.new(0.5, 110, 1, -90) }, Enum.EasingStyle.Quint)
+    task.delay(duration, function()
+        if not toast or not toast.Parent then return end
+        tween(toast, 0.18, {
+            Position = UDim2.new(0.5, 130, 1, -90),
+            BackgroundTransparency = 1,
+        }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        task.delay(0.22, function()
+            if toast then toast:Destroy() end
+        end)
+    end)
+end
+
+function Window:Get(key)
+    return self.State[key]
+end
+
+function Window:Set(key, value)
+    self.State[key] = value
+    for _, tab in ipairs(self.Tabs) do
+        local row = tab.Rows[key]
+        if row then
+            if row.Set then row:Set(value, true) end
+            break
+        end
+    end
+    return value
+end
+
+function Window:Destroy()
+    self.Destroyed = true
+    for _, c in ipairs(self.Connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    self.Connections = {}
+    if self.Gui then self.Gui:Destroy() end
+end
+
+-- ============================================================
+-- 行构造（原版 25,25,30 / 圆角 4 / 高 58）
+-- ============================================================
+local function baseRow(tab, height)
+    local row = mk("Frame", {
+        Name = "Row",
+        Size = UDim2.new(1, -12, 0, height or ROW_H),
+        BackgroundColor3 = T.row,
+        BackgroundTransparency = 0.15,
+        BorderSizePixel = 0,
+        ZIndex = 4,
+        Active = false,
+        ClipsDescendants = true,
+        LayoutOrder = (tab.Items + 1) * 1000,
+        Visible = (tab.Window.TabIndex == #tab.Window.Tabs),
+    }, tab.Container)
+    corner(row, SIZE.radiusRow)
+    tab.Items = tab.Items + 1
+    table.insert(tab.Widgets, row)
+
+    row.MouseEnter:Connect(function()
+        tween(row, 0.12, { BackgroundColor3 = T.rowHover, BackgroundTransparency = 0.1 })
+    end)
+    row.MouseLeave:Connect(function()
+        tween(row, 0.12, { BackgroundColor3 = T.row, BackgroundTransparency = 0.15 })
+    end)
+    return row
+end
+
+local function addTitle(row, data, offset)
+    mk("TextLabel", {
+        Name = "Title",
+        Size = UDim2.new(1, -80, 0, 22),
+        Position = UDim2.new(0, 12, 0, offset or 8),
+        BackgroundTransparency = 1,
+        Text = data.Name or data.name or "",
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.rowTitle,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 5,
+        Active = false,
+    }, row)
+end
+
+local function addDesc(row, data, y)
+    local desc = data.Desc or data.desc
+    if not desc then return end
+    mk("TextLabel", {
+        Name = "Desc",
+        Size = UDim2.new(1, -80, 0, 18),
+        Position = UDim2.new(0, 12, 0, y or 30),
+        BackgroundTransparency = 1,
+        Text = desc,
+        TextColor3 = T.textDim,
+        Font = FONT,
+        TextSize = LAYOUT.rowDesc,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 5,
+        Active = false,
+    }, row)
+end
+
+function Tab:Toggle(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local initial = cfg.Default
+    if initial == nil then initial = false end
+    self.Window.State[key] = initial
+
+    local ctrl = makeCheckbox(row, LAYOUT.boxSize, -6, function(v)
+        self.Window.State[key] = v
+        if cfg.Callback then cfg.Callback(v) end
+    end)
+    ctrl.SetSilent(initial)
+
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+function Tab:Label(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+    return row
+end
+
+-- 展开项：子项作为 List 的兄弟行插入，靠 UIListLayout 自然排版，不会有裁剪/重叠问题
+function Tab:Expand(cfg)
+    local key = cfg.Key or cfg.key
+    local children = cfg.Children or cfg.children or {}
+
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    -- 右侧控件列：最右是勾选框，勾选框左边是展开箭头
+    -- makeCheckbox(size, rightOffset) 实际布局：
+    --   hit 宽 = size + 16，右边缘在 rightOffset
+    --   box 居中在 hit 内 → box 右边缘 = rightOffset - 8
+    local ARROW_W = LAYOUT.arrowSize
+    local CHECK_W = 28
+    local CHECK_EDGE = 8                       -- 勾选框 hit 距行右
+    local CHECK_BOX_RIGHT = CHECK_EDGE + 8     -- box 右边缘距行右 = 16
+    local GAP = 12                             -- 箭头与勾选框可见间隙
+    -- 箭头右边缘 = box 左边缘 - GAP
+    local ARROW_RIGHT_OFFSET = CHECK_BOX_RIGHT + CHECK_W + GAP
+
+    local ctrl = makeCheckbox(row, CHECK_W, -CHECK_EDGE, function(v)
+        self.Window.State[key] = v
+        if cfg.Callback then cfg.Callback(v) end
+    end)
+    local initial = cfg.Default
+    if initial == nil then initial = false end
+    ctrl.SetSilent(initial)
+    self.Window.State[key] = initial
+    self.Rows[key] = ctrl
+
+    local arrowBtn = mk("TextButton", {
+        Name = "Arrow",
+        Size = UDim2.fromOffset(ARROW_W, ARROW_W),
+        Position = UDim2.new(1, -ARROW_RIGHT_OFFSET, 0.5, 0),
+        AnchorPoint = Vector2.new(1, 0.5),
+        BackgroundColor3 = T.arrowBg,
+        Text = "▼",
+        TextColor3 = T.arrowText,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.arrowText,
+        Active = true,
+        AutoButtonColor = false,
+        ZIndex = 20,
+    }, row)
+    corner(arrowBtn, SIZE.radius)
+    stroke(arrowBtn, T.boxStroke, 1, 0.45)
+    arrowBtn.MouseEnter:Connect(function() tween(arrowBtn, 0.1, { BackgroundColor3 = T.arrowHover }) end)
+    arrowBtn.MouseLeave:Connect(function() tween(arrowBtn, 0.1, { BackgroundColor3 = T.arrowBg }) end)
+
+    -- 子项行：全部作为 List 的直接子元素，展开时只是显隐，不涉及尺寸计算
+    local childRows = {}
+    local orderBase = self.Items
+
+    for i, child in ipairs(children) do
+        local ckey = child.Key or child.key
+        local kind = child.Kind or child.kind
+
+        local ch = mk("Frame", {
+            Name = "ChildRow",
+            Size = UDim2.new(1, -12, 0, 0),   -- 初始高度 0，展开时再撑开
+            BackgroundColor3 = T.rowChild,
+            BackgroundTransparency = 0.15,
+            BorderSizePixel = 0,
+            LayoutOrder = orderBase * 1000 + i,
+            ClipsDescendants = true,
+            Visible = false,
+            ZIndex = 4,
+            Active = false,
+        }, self.Container)
+        corner(ch, SIZE.radius)
+        table.insert(self.Widgets, ch)
+        table.insert(childRows, ch)
+
+        -- 左侧绿色竖条（原版细节，保留）
+        local bar = mk("Frame", {
+            Name = "Bar",
+            Size = UDim2.new(0, 2, 1, -14),
+            Position = UDim2.new(0, 6, 0, 7),
+            BackgroundColor3 = T.accentBar,
+            BorderSizePixel = 0,
+            ZIndex = 6,
+        }, ch)
+        corner(bar, 1)
+
+        mk("TextLabel", {
+            Name = "ChildTitle",
+            Size = UDim2.new(1, -100, 1, 0),
+            Position = UDim2.new(0, 16, 0, 0),
+            BackgroundTransparency = 1,
+            Text = child.Name or child.name or "",
+            TextColor3 = T.textChild,
+            Font = FONT,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 6,
+            Active = false,
+        }, ch)
+
+        if kind == "number" then
+            local holder = mk("Frame", {
+                Name = "NumInput",
+                Size = UDim2.fromOffset(78, 28),
+                Position = UDim2.new(1, -86, 0.5, -14),
+                BackgroundColor3 = T.box,
+                BackgroundTransparency = 0.1,
+                BorderSizePixel = 0,
+                ZIndex = 20,
+            }, ch)
+            corner(holder, 5)
+            stroke(holder, T.boxStroke, 1, 0.4)
+            local box = mk("TextBox", {
+                Name = "Input",
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundTransparency = 1,
+                Text = tostring(child.Default or child.min or 1),
+                TextColor3 = T.text,
+                Font = FONT,
+                TextSize = 13,
+                TextXAlignment = Enum.TextXAlignment.Center,
+                ClearTextOnFocus = false,
+                ZIndex = 21,
+            }, holder)
+            box.FocusLost:Connect(function()
+                local v = tonumber(box.Text)
+                if v then
+                    v = math.clamp(v, child.Min or child.min or 1, child.Max or child.max or 100)
+                    box.Text = tostring(v)
+                    self.Window.State[ckey] = v
+                    if child.Callback then child.Callback(v) end
+                else
+                    box.Text = tostring(self.Window.State[ckey] or child.Default or 1)
+                end
+            end)
+            self.Rows[ckey] = {
+                Set = function(v) box.Text = tostring(v) end,
+                Get = function() return tonumber(box.Text) end,
+            }
+            self.Window.State[ckey] = child.Default or child.min or 1
+
+        elseif kind == "cycle" then
+            -- 加宽的切换按钮：单键循环，整块可点，移动端也好按
+            local options = child.Options or { "选项1", "选项2" }
+            local idx = self.Window.State[ckey] or 1
+            local cyc = mk("TextButton", {
+                Name = "Cycle",
+                Size = UDim2.new(0, LAYOUT.cycleW, 0, LAYOUT.cycleH),
+                Position = UDim2.new(1, -(LAYOUT.cycleW + 8), 0.5, -LAYOUT.cycleH / 2),
+                BackgroundColor3 = T.cycleBg,
+                Text = tostring(options[idx] or "?"),
+                TextColor3 = T.text,
+                Font = FONT_BOLD,
+                TextSize = LAYOUT.ctrlText,
+                Active = true,
+                AutoButtonColor = false,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                ZIndex = 20,
+            }, ch)
+            corner(cyc, 5)
+            stroke(cyc, T.boxStroke, 1, 0.4)
+            bindTap(cyc, function()
+                idx = idx % #options + 1
+                cyc.Text = tostring(options[idx])
+                self.Window.State[ckey] = idx
+                playClick()
+                if child.Callback then child.Callback(options[idx], idx) end
+            end)
+            cyc.MouseEnter:Connect(function() tween(cyc, 0.1, { BackgroundColor3 = T.cycleHover }) end)
+            cyc.MouseLeave:Connect(function() tween(cyc, 0.1, { BackgroundColor3 = T.cycleBg }) end)
+            self.Rows[ckey] = {
+                Set = function(v)
+                    for j, o in ipairs(options) do if o == v then idx = j break end end
+                    cyc.Text = tostring(options[idx])
+                end,
+                Get = function() return options[idx], idx end,
+            }
+
+        else
+            local sub = makeCheckbox(ch, LAYOUT.subBoxSize, -8, function(v)
+                self.Window.State[ckey] = v
+                if child.Callback then child.Callback(v) end
+            end)
+            local init = child.Default
+            if init == nil then init = false end
+            sub.SetSilent(init)
+            self.Window.State[ckey] = init
+            self.Rows[ckey] = sub
+        end
+    end
+
+    -- ===== 展开/收起 =====
+    -- 状态必须挂在 Window 上，否则切 Tab 后闭包里的局部变量会丢失
+    local expandKey = "__expand_" .. tostring(key)
+    if self.Window.State[expandKey] == nil then
+        self.Window.State[expandKey] = false
+    end
+    local expanded = self.Window.State[expandKey]
+
+    local CHILD_H = 42
+
+    -- 把子行设为「展开」或「收起」状态
+    --   animate=true 时用补间，跟主行展开同步；false 时直接落终态
+    local function applyState(show, animate, delay)
+        for _, ch in ipairs(childRows) do
+            if ch and ch.Parent then
+                if show then
+                    ch.Visible = true
+                    if animate then
+                        Anim.to(ch, { Size = UDim2.new(1, -12, 0, CHILD_H) },
+                            0.20, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay or 0)
+                    else
+                        ch.Size = UDim2.new(1, -12, 0, CHILD_H)
+                    end
+                else
+                    -- 收起时必须 Visible=false：UIListLayout 对可见元素都会算 Padding，
+                    -- 高度 0 只要还可见就会贡献 6px 间隙（这就是「中间空一块」的来源）
+                    if animate then
+                        Anim.to(ch, { Size = UDim2.new(1, -12, 0, 0) },
+                            0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                        -- 动画结束后一定隐藏，避免残留 6px 间距
+                        task.delay(0.20, function()
+                            if ch and ch.Parent then
+                                ch.Visible = false
+                            end
+                        end)
+                    else
+                        ch.Size = UDim2.new(1, -12, 0, 0)
+                        ch.Visible = false
+                    end
+                end
+            end
+        end
+        -- 统一用 ▼，靠旋转 180° 变成 ▲（v 旋转后还是 v，所以不能用它）
+        arrowBtn.Text = "▼"
+        local fullSize = UDim2.fromOffset(ARROW_W, ARROW_W)
+        if animate then
+            -- 旋转用 Back 缓动（带过冲回弹），同时尺寸从 0.85 弹回 1
+            Anim.to(arrowBtn, { Rotation = show and 180 or 0 }, 0.30,
+                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            arrowBtn.Size = UDim2.new(0, ARROW_W * 0.85, 0, ARROW_W * 0.85)
+            Anim.to(arrowBtn, { Size = fullSize }, 0.28,
+                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        else
+            arrowBtn.Rotation = show and 180 or 0
+            arrowBtn.Size = fullSize
+        end
+    end
+
+    -- 注册恢复函数：SelectTab 切回本页时会调用
+    table.insert(self.Window.ExpandRestorers, {
+        tab = self,
+        expandKey = expandKey,
+        panelRow = row,
+        apply = applyState,
+        get = function() return self.Window.State[expandKey] end,
+    })
+
+    -- 初始状态
+    applyState(expanded)
+
+    bindTap(arrowBtn, function()
+        expanded = not expanded
+        self.Window.State[expandKey] = expanded
+        playClick()
+        -- 旋转带过冲回弹 + 尺寸弹性缩放
+        Anim.to(arrowBtn, { Rotation = expanded and 180 or 0 }, 0.30,
+            Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        arrowBtn.Size = UDim2.new(0, ARROW_W * 0.85, 0, ARROW_W * 0.85)
+        Anim.to(arrowBtn, { Size = UDim2.fromOffset(ARROW_W, ARROW_W) }, 0.28,
+            Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+        if expanded then
+            local delay = 0
+            for _, ch in ipairs(childRows) do
+                ch.Visible = true
+                ch.Size = UDim2.new(1, -12, 0, 0)
+                ch.ClipsDescendants = true
+                tween(ch, 0.22, { Size = UDim2.new(1, -12, 0, CHILD_H) },
+                    Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
+                delay = delay + 0.03
+            end
+        else
+            local delay = 0
+            for i = #childRows, 1, -1 do
+                local ch = childRows[i]
+                tween(ch, 0.16, { Size = UDim2.new(1, -12, 0, 0) },
+                    Enum.EasingStyle.Quad, Enum.EasingDirection.In, delay)
+                delay = delay + 0.02
+                task.delay(0.18 + delay, function()
+                    if not expanded and ch then ch.Visible = false end
+                end)
+            end
+        end
+    end)
+
+    self.Items = self.Items + #children
+    return ctrl
+end
+function Tab:Cycle(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local options = cfg.Options or { "选项1", "选项2" }
+    local idx = cfg.DefaultIndex or 1
+    self.Window.State[key] = options[idx]
+
+    local ctrl = makeCycle(row, options, idx, function(opt, i)
+        self.Window.State[key] = opt
+        if cfg.Callback then cfg.Callback(opt, i) end
+    end)
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+function Tab:Input(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    self.Window.State[key] = cfg.Default
+
+    local ctrl = makeNumberInput(row, {
+        Default = cfg.Default,
+        Min = cfg.Min,
+        Max = cfg.Max,
+        Quick = cfg.Quick,
+        RightOffset = cfg.RightOffset or -230,
+    }, function(v)
+        self.Window.State[key] = v
+        if cfg.Callback then cfg.Callback(v) end
+    end)
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+function Tab:Buttons(cfg)
+    local list = cfg.Buttons or {}
+    local row = mk("Frame", {
+        Name = "ButtonRow",
+        Size = UDim2.new(1, 0, 0, 40),
+        BackgroundTransparency = 1,
+        LayoutOrder = (self.Items + 1) * 1000,
+        Visible = (self.Window.TabIndex == #self.Window.Tabs),
+    }, self.Container)
+    self.Items = self.Items + 1
+    table.insert(self.Widgets, row)
+
+    local flow = mk("Frame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+    }, row)
+    mk("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal,
+        HorizontalAlignment = Enum.HorizontalAlignment.Right,
+        VerticalAlignment = Enum.VerticalAlignment.Center,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 8),
+    }, flow)
+
+    for i, item in ipairs(list) do
+        local b = makeButton(flow, {
+            Text = item.Text or item.Title,
+            Variant = item.Variant,
+            Width = item.Width or 88,
+            Callback = item.Callback,
+        })
+        b.LayoutOrder = i
+    end
+    return row
+end
+
+-- ============================================================
+-- 额外控件
+-- ============================================================
+
+-- 滑动条：拖动 + 点击跳转 + 数值显示
+function Tab:Slider(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local minV = cfg.Min or 0
+    local maxV = cfg.Max or 100
+    local step = cfg.Step or 1
+    local value = cfg.Default or minV
+    self.Window.State[key] = value
+
+    local SLIDER_W = LAYOUT.sliderW
+    local holder = mk("Frame", {
+        Name = "SliderHolder",
+        Size = UDim2.new(0, SLIDER_W + 52, 0, 22),
+        Position = UDim2.new(1, -(SLIDER_W + 52 + 8), 0.5, -11),
+        BackgroundTransparency = 1,
+    }, row)
+
+    local track = mk("Frame", {
+        Name = "Track",
+        Size = UDim2.new(0, SLIDER_W, 0, LAYOUT.sliderH),
+        Position = UDim2.new(0, 0, 0.5, -LAYOUT.sliderH / 2),
+        BackgroundColor3 = T.ctrl,
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    }, holder)
+    corner(track, 3)
+
+    local fill = mk("Frame", {
+        Name = "Fill",
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = T.accent,
+        BorderSizePixel = 0,
+        ZIndex = 7,
+    }, track)
+    corner(fill, 3)
+
+    local knob = mk("Frame", {
+        Name = "Knob",
+        Size = UDim2.fromOffset(LAYOUT.knobSize, LAYOUT.knobSize),
+        Position = UDim2.new(0, -LAYOUT.knobSize / 2, 0.5, -LAYOUT.knobSize / 2),
+        BackgroundColor3 = Color3.fromRGB(245, 247, 251),
+        BorderSizePixel = 0,
+        ZIndex = 8,
+    }, track)
+    corner(knob, 7)
+
+    local valueLabel = mk("TextLabel", {
+        Name = "Value",
+        Size = UDim2.fromOffset(46, 18),
+        Position = UDim2.new(0, SLIDER_W + 6, 0.5, -9),
+        BackgroundTransparency = 1,
+        Text = tostring(value),
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        ZIndex = 6,
+    }, holder)
+
+    local function render()
+        local alpha = (maxV > minV) and ((value - minV) / (maxV - minV)) or 0
+        alpha = math.clamp(alpha, 0, 1)
+        fill.Size = UDim2.new(alpha, 0, 1, 0)
+        knob.Position = UDim2.new(alpha, -LAYOUT.knobSize / 2, 0.5, -LAYOUT.knobSize / 2)
+        valueLabel.Text = (step >= 1) and tostring(math.floor(value + 0.5)) or string.format("%.2f", value)
+    end
+
+    local hit = mk("TextButton", {
+        Name = "SliderHit",
+        Size = UDim2.new(0, SLIDER_W, 0, 22),
+        Position = UDim2.new(0, 0, 0.5, -11),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 9,
+    }, holder)
+
+    local function setFromX(x)
+        local absX = track.AbsolutePosition.X
+        local alpha = math.clamp((x - absX) / SLIDER_W, 0, 1)
+        local raw = minV + (maxV - minV) * alpha
+        if step >= 1 then
+            raw = math.floor(raw / step + 0.5) * step
+        end
+        value = math.clamp(raw, minV, maxV)
+        render()
+        if cfg.Callback then cfg.Callback(value) end
+        self.Window.State[key] = value
+    end
+
+    local dragging = false
+    hit.MouseButton1Down:Connect(function()
+        dragging = true
+        local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+        if ok and loc then setFromX(loc.X) end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch then
+            setFromX(input.Position.X)
+        end
+    end)
+
+    render()
+
+    local ctrl = {
+        Set = function(v, silent)
+            value = math.clamp(v, minV, maxV)
+            render()
+            self.Window.State[key] = value
+            if not silent and cfg.Callback then cfg.Callback(value) end
+        end,
+        Get = function() return value end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+-- 按键绑定：点击后按下任意键
+function Tab:Keybind(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local current = cfg.Default
+    self.Window.State[key] = current
+
+    local btn = mk("TextButton", {
+        Name = "KeybindBtn",
+        Size = UDim2.new(0, LAYOUT.keybindW, 0, LAYOUT.keybindH),
+        Position = UDim2.new(1, -(LAYOUT.keybindW + 8), 0.5, -LAYOUT.keybindH / 2),
+        BackgroundColor3 = T.ctrl,
+        Text = current and current.Name or "未绑定",
+        TextColor3 = T.ctrlText,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.ctrlText,
+        AutoButtonColor = false,
+        ZIndex = 20,
+        Active = true,
+    }, row)
+    corner(btn, 5)
+    stroke(btn, T.ctrlStroke, 1, 0.4)
+
+    local listening = false
+    bindTap(btn, function()
+        listening = true
+        btn.Text = "按下按键…"
+        btn.TextColor3 = T.accent
+    end)
+
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if not listening or processed then return end
+        listening = false
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            current = input.KeyCode
+            btn.Text = current.Name
+            btn.TextColor3 = T.ctrlText
+            self.Window.State[key] = current
+            if cfg.Callback then cfg.Callback(current) end
+        else
+            btn.Text = current and current.Name or "未绑定"
+            btn.TextColor3 = T.ctrlText
+        end
+    end)
+
+    local ctrl = {
+        Set = function(v) current = v; btn.Text = v and v.Name or "未绑定"; self.Window.State[key] = v end,
+        Get = function() return current end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+-- 多选：一组小按钮，可多选
+function Tab:MultiSelect(cfg)
+    local row = baseRow(self, ROW_H + 20)
+    addTitle(row, cfg, 8)
+
+    local key = cfg.Key or cfg.key
+    local options = cfg.Options or {}
+    local selected = {}
+    for _, o in ipairs(cfg.Default or {}) do selected[o] = true end
+    self.Window.State[key] = selected
+
+    local flow = mk("Frame", {
+        Name = "Chips",
+        Size = UDim2.new(1, -20, 0, 26),
+        Position = UDim2.new(0, 10, 0, 32),
+        BackgroundTransparency = 1,
+    }, row)
+    mk("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal,
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        VerticalAlignment = Enum.VerticalAlignment.Center,
+    }, flow)
+
+    for i, opt in ipairs(options) do
+        local chip = mk("TextButton", {
+            Name = "Chip",
+            Size = UDim2.fromOffset(LAYOUT.chipW, LAYOUT.chipH),
+            BackgroundColor3 = selected[opt] and T.accent or T.ctrl,
+            Text = tostring(opt),
+            TextColor3 = selected[opt] and T.tabTextOn or T.ctrlText,
+            Font = FONT_BOLD,
+            TextSize = LAYOUT.ctrlText,
+            AutoButtonColor = false,
+            LayoutOrder = i,
+            ZIndex = 20,
+            Active = true,
+        }, flow)
+        corner(chip, 4)
+        bindTap(chip, function()
+            selected[opt] = not selected[opt]
+            Anim.to(chip, {
+                BackgroundColor3 = selected[opt] and T.accent or T.ctrl,
+                TextColor3 = selected[opt] and T.tabTextOn or T.ctrlText,
+            }, 0.12)
+            self.Window.State[key] = selected
+            if cfg.Callback then cfg.Callback(selected) end
+        end)
+    end
+
+    local ctrl = {
+        Get = function() return selected end,
+        Set = function(t)
+            selected = t
+            self.Window.State[key] = selected
+        end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+function Tab:Divider()
+    local row = mk("Frame", {
+        Name = "Divider",
+        Size = UDim2.new(1, 0, 0, 9),
+        BackgroundTransparency = 1,
+        LayoutOrder = (self.Items + 1) * 1000,
+        Visible = (self.Window.TabIndex == #self.Window.Tabs),
+    }, self.Container)
+    self.Items = self.Items + 1
+    table.insert(self.Widgets, row)
+    mk("Frame", {
+        Size = UDim2.new(1, 0, 0, 1),
+        Position = UDim2.new(0, 0, 0.5, 0),
+        BackgroundColor3 = T.panelStroke,
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+    }, row)
+    return row
+end
+
+function Tab:Get(key)
+    return self.Window.State[key]
+end
+
+return UI
