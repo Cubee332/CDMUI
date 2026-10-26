@@ -571,7 +571,7 @@ local function makeNumberInput(parent, cfg, onChange)
     local holder = mk("Frame", {
         Name = "NumInput",
         Size = UDim2.new(0, LAYOUT.inputW, 0, LAYOUT.inputH),
-        Position = UDim2.new(1, cfg.RightOffset or -230, 0.5, -15),
+        Position = UDim2.new(1, -(LAYOUT.inputW + 8), 0.5, -LAYOUT.inputH / 2),
         BackgroundColor3 = T.box,
         BackgroundTransparency = 0.2,
         BorderSizePixel = 0,
@@ -619,7 +619,7 @@ local function makeNumberInput(parent, cfg, onChange)
     -- 快捷值：统一成 ghost 变体，跟主题一致
     if cfg.Quick then
         local qw, gap = 46, 4
-        local startX = (cfg.RightOffset or -230) + 70 + 6
+        local startX = -(LAYOUT.inputW + 8) - (#cfg.Quick) * (46 + 4) - 6
         for i, v in ipairs(cfg.Quick) do
             local qb = makeButton(parent, {
                 Text = tostring(v),
@@ -1659,7 +1659,113 @@ function Tab:Expand(cfg)
             Active = false,
         }, ch)
 
-        if kind == "number" then
+        if kind == "slider" then
+            -- 子项滑动条
+            local SW = IS_MOBILE and 150 or 130
+            local sh = mk("Frame", {
+                Name = "SubSlider",
+                Size = UDim2.new(0, SW + 46, 0, 24),
+                Position = UDim2.new(1, -(SW + 46 + 8), 0.5, -12),
+                BackgroundTransparency = 1,
+            }, ch)
+
+            local track = mk("Frame", {
+                Size = UDim2.new(0, SW, 0, 6),
+                Position = UDim2.new(0, 0, 0.5, -3),
+                BackgroundColor3 = T.ctrl,
+                BorderSizePixel = 0,
+                ZIndex = 6,
+            }, sh)
+            corner(track, 3)
+
+            local fill = mk("Frame", {
+                Size = UDim2.new(0, 0, 1, 0),
+                BackgroundColor3 = T.accent,
+                BorderSizePixel = 0,
+                ZIndex = 7,
+            }, track)
+            corner(fill, 3)
+
+            local knob = mk("Frame", {
+                Size = UDim2.fromOffset(12, 12),
+                Position = UDim2.new(0, -6, 0.5, -6),
+                BackgroundColor3 = Color3.fromRGB(245, 247, 251),
+                BorderSizePixel = 0,
+                ZIndex = 8,
+            }, track)
+            corner(knob, 6)
+
+            local vlab = mk("TextLabel", {
+                Size = UDim2.fromOffset(40, 18),
+                Position = UDim2.new(0, SW + 6, 0.5, -9),
+                BackgroundTransparency = 1,
+                Text = tostring(child.Default or 0),
+                TextColor3 = T.text,
+                Font = FONT_BOLD,
+                TextSize = 11,
+                TextXAlignment = Enum.TextXAlignment.Right,
+                ZIndex = 6,
+            }, sh)
+
+            local mn = child.Min or 0
+            local mx = child.Max or 100
+            local st = child.Step or 0.05
+            local val = child.Default or mn
+
+            local function renderSub()
+                local a = (mx > mn) and ((val - mn) / (mx - mn)) or 0
+                a = math.clamp(a, 0, 1)
+                fill.Size = UDim2.new(a, 0, 1, 0)
+                knob.Position = UDim2.new(a, -6, 0.5, -6)
+                vlab.Text = string.format("%.2f", val)
+            end
+
+            local hit = mk("TextButton", {
+                Size = UDim2.new(0, SW, 0, 24),
+                Position = UDim2.new(0, 0, 0.5, -12),
+                BackgroundTransparency = 1,
+                Text = "",
+                AutoButtonColor = false,
+                ZIndex = 9,
+            }, sh)
+
+            local dragging = false
+            local function setX(x)
+                local ax = track.AbsolutePosition.X
+                local a = math.clamp((x - ax) / SW, 0, 1)
+                val = mn + (mx - mn) * a
+                val = math.floor(val / st + 0.5) * st
+                renderSub()
+                self.Window.State[ckey] = val
+                if child.Callback then child.Callback(val) end
+            end
+            hit.MouseButton1Down:Connect(function()
+                dragging = true
+                local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+                if ok and loc then setX(loc.X) end
+            end)
+            UserInputService.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging = false
+                end
+            end)
+            UserInputService.InputChanged:Connect(function(input)
+                if not dragging then return end
+                if input.UserInputType == Enum.UserInputType.MouseMovement
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    setX(input.Position.X)
+                end
+            end)
+
+            renderSub()
+            self.Rows[ckey] = {
+                Set = function(v) val = math.clamp(v, mn, mx); renderSub() end,
+                Get = function() return val end,
+            }
+            self.Window.State[ckey] = val
+
+        elseif kind == "number" then
             local holder = mk("Frame", {
                 Name = "NumInput",
                 Size = UDim2.fromOffset(78, 28),
