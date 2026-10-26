@@ -1,45 +1,42 @@
 # CDMUI
 
-![战斗页](screenshots/combat.png)
-
 Roblox / Luau 单文件控制面板 UI 库。零依赖，`loadstring` 直载。
 
 - **控件齐全** — Toggle / Slider / Cycle / Input / Keybind / MultiSelect / Expand / Label / Divider / Buttons
 - **统一视觉** — 全库共用一套色阶与尺寸规范（`T` 主题表 + `SIZE` 尺寸表），改一处全局生效
 - **完整动效** — 面板进出场、Tab 收起展开、子项逐行撑开、勾选框缩放弹出、循环按钮滑动、按钮按压回弹
 - **PC / 移动端自适应** — `LAYOUT` 表统一管理两套尺寸，移动端放大点击区域、Tab 平分整行、支持拖动面板
-- **无头预览** — 配套 [Roblox-Ui-Expert-Skill](https://github.com/WasKKal/Roblox-Ui-Expert-Skill)，不进 Studio 就能渲染 PNG / 可交互 HTML / APNG
 
 ## 快速开始
 
 ```lua
-local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/WasKKal/CDMUI/main/CDMUI.lua"))()
+local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
 
-local win = UI.Create({ Title = "控制面板" })
-local tab = win:Tab("战斗")
+local win = UI.Create({ Title = "演示面板" })
+local tab = win:Tab("演示页")
 
 tab:Toggle({
-    Key = "aimbot",
-    Title = "自动瞄准",
-    Desc = "锁定视野内最近的敌人",
+    Key = "demo_toggle",
+    Title = "演示开关",
+    Desc = "这是一段演示说明文本",
     Default = true,
-    Callback = function(v) print("aimbot", v) end,
+    Callback = function(v) print("demo_toggle", v) end,
 })
 
 tab:Slider({
-    Key = "fov",
-    Title = "瞄准范围",
-    Min = 30, Max = 180, Step = 5, Default = 90,
+    Key = "demo_slider",
+    Title = "演示滑条",
+    Min = 0, Max = 100, Step = 5, Default = 50,
 })
 
 tab:Expand({
-    Key = "esp",
-    Title = "敌人透视",
-    Desc = "高亮全场感染者",
+    Key = "demo_group",
+    Title = "演示分组",
+    Desc = "可展开的子项集合",
     Children = {
-        { Kind = "toggle", Key = "espName",  Title = "显示名称", Default = true },
-        { Kind = "toggle", Key = "espHP",    Title = "显示血量" },
-        { Kind = "number", Key = "espRange", Title = "显示距离", Min = 50, Max = 500, Default = 200 },
+        { Kind = "toggle", Key = "sub_toggle", Title = "子开关" },
+        { Kind = "number", Key = "sub_number", Title = "子数值", Min = 1, Max = 20, Default = 4 },
+        { Kind = "cycle",  Key = "sub_cycle",  Title = "子选项", Options = { "选项A", "选项B" } },
     },
 })
 ```
@@ -136,22 +133,6 @@ local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
 | Tab | 88 宽 | 平分整行 |
 | 勾选框 | 28 | 32 |
 | 控件字号 | 12 | 14 |
-
-## 无头预览
-
-```powershell
-tools\ui.cmd -Action image `
-  -Lib "CDMUI.lua=<repo>\CDMUI.lua,demo.lua=<repo>\examples\demo.lua" `
-  -Scenario <repo>\examples\demo_scenario.lua `
-  -Out out\cdmui.png
-```
-
-| 文件 | 内容 |
-|---|---|
-| `examples/demo.lua` | 四页完整示例 |
-| `examples/demo_scenario.lua` | 布局 + Tab 切换 + 控件点击断言 |
-| `examples/demo_tabs_scenario.lua` | Slider / Keybind / MultiSelect 断言 |
-| `examples/demo_anim_scenario.lua` | 进出场动画采样 |
 
 ## 许可
 
