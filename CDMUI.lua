@@ -1505,7 +1505,7 @@ local function addTitle(row, data, offset)
         Size = UDim2.new(1, -80, 0, 22),
         Position = UDim2.new(0, 12, 0, offset or 8),
         BackgroundTransparency = 1,
-        Text = data.Name or data.name or "",
+        Text = data.Name or data.name or data.Title or data.title or "",
         TextColor3 = T.text,
         Font = FONT_BOLD,
         TextSize = LAYOUT.rowTitle,
@@ -1516,7 +1516,7 @@ local function addTitle(row, data, offset)
 end
 
 local function addDesc(row, data, y)
-    local desc = data.Desc or data.desc
+    local desc = data.Desc or data.desc or data.Description
     if not desc then return end
     mk("TextLabel", {
         Name = "Desc",
