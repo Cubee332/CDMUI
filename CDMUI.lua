@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.4
+    CDMUI 1.3.5
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,6 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
+-- CDMUI v1.3.5  加载动画期间禁止关闭面板；指引改为 5 秒
 -- CDMUI v1.3.4  修复指引时长被旧的 2 秒计时覆盖；顶栏按钮加出现动画
 -- CDMUI v1.3.3  顶栏按钮延后到加载动画结束创建；指引时长延长
 -- CDMUI v1.3.2  面板打开自动解锁鼠标（双方案兜底）；面板位置上移
@@ -38,7 +39,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.4"
+UI.Version = "1.3.5"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -901,6 +902,9 @@ end
 -- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
 local function bindShieldClose(self)
     self.Shield.MouseButton1Click:Connect(function()
+        -- 加载动画期间不许关
+        if self.Busy then return end
+
         local mp = UserInputService:GetMouseLocation()
         local ap = self.Panel.AbsolutePosition
         local asz = self.Panel.AbsoluteSize
@@ -1169,6 +1173,9 @@ function Window:_PlayIntro()
     local gui = self.Gui
     local panel = self.Panel
 
+    -- 加载期间锁住关闭入口
+    self.Busy = true
+
     -- 隐藏主面板，先播加载
     panel.Visible = false
 
@@ -1286,6 +1293,9 @@ function Window:_PlayIntro()
                     pcall(self.TopbarSetActive, true)
                 end
             end
+
+            -- 加载完成，解除关闭锁
+            self.Busy = false
             -- 不要设 0（否则面板完全不可见，且难以恢复）
             if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.9 end
             panel.BackgroundTransparency = 1
@@ -1773,6 +1783,8 @@ end
 
 function Window:SetVisible(visible, instant)
     if self.Destroyed then return end
+    -- 加载动画进行中，外部关闭请求一律忽略
+    if self.Busy and not instant then return end
 
     if not instant and self.Visible ~= (visible and true or false) then
         playClick()
