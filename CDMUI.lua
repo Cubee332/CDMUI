@@ -20,7 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
--- CDMUI v1.4.0  Tab 栏改为横向滚动（自适应宽度/平滑居中/拖动手势/滚到底零空白）
+-- CDMUI v1.4.1  Expand 子项支持 toggle；勾选框改用 Activated 事件
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -33,7 +33,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.0"
+UI.Version = "1.4.1"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -480,7 +480,8 @@ local function makeCheckbox(parent, size, rightOffset, onChange)
                           Position = UDim2.new(0.5, -size / 2, 0.5, -size / 2) }, Enum.EasingStyle.Back)
     end)
 
-    bindTap(hit, function()
+    -- 主触发：Activated（点击成立才触发）
+    hit.Activated:Connect(function()
         value = not value
         render(true)
         playClick()
@@ -3116,6 +3117,17 @@ function Tab:Expand(cfg)
                 Get = function() return val end,
             }
             self.Window.State[ckey] = val
+
+        elseif kind == "toggle" then
+            -- 子项开关：右侧放勾选框
+            -- 右边距要够大，否则会被 ChildRow 的 ClipsDescendants 裁掉
+            local ctrl = makeCheckbox(ch, 22, -22, function(v)
+                self.Window.State[ckey] = v
+                if child.Callback then pcall(child.Callback, v) end
+            end)
+            ctrl.SetSilent(child.Default and true or false)
+            self.Window.State[ckey] = child.Default and true or false
+            self.Rows[ckey] = ctrl
 
         elseif kind == "number" then
             local holder = mk("Frame", {
