@@ -2253,6 +2253,88 @@ function Tab:Toggle(cfg)
 end
 
 -- 行内按钮：标题/描述在左，按钮在右（类似 Toggle 的布局）
+-- 整行可点击：和普通行一样的样式，但点击整行触发回调
+function Tab:ClickableRow(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    -- 右侧提示箭头（可选）
+    if cfg.Arrow then
+        mk("TextLabel", {
+            Name = "Arrow",
+            Size = UDim2.fromOffset(20, 20),
+            Position = UDim2.new(1, -26, 0.5, -10),
+            BackgroundTransparency = 1,
+            Text = "›",
+            TextColor3 = T.textDim,
+            Font = FONT_BOLD,
+            TextSize = IS_MOBILE and 20 or 18,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            ZIndex = 6,
+            Active = false,
+        }, row)
+    end
+
+    -- 整行做成按钮（覆盖在上层，透明）
+    local hit = mk("TextButton", {
+        Name = "RowHit",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 25,
+        Active = true,
+    }, row)
+
+    local title = row:FindFirstChild("Title")
+    local desc = row:FindFirstChild("Desc")
+    local originalColor = row.BackgroundColor3
+
+    hit.MouseEnter:Connect(function()
+        Anim.to(row, { BackgroundColor3 = T.rowHover }, 0.12)
+    end)
+    hit.MouseLeave:Connect(function()
+        Anim.to(row, { BackgroundColor3 = originalColor }, 0.12)
+    end)
+    hit.MouseButton1Down:Connect(function()
+        Anim.to(row, { BackgroundTransparency = 0.05 }, 0.08)
+    end)
+    hit.MouseButton1Up:Connect(function()
+        Anim.to(row, { BackgroundTransparency = 0.15 }, 0.12)
+    end)
+
+    local busy = false
+    bindTap(hit, function()
+        if busy then return end
+        playClick()
+        if cfg.Callback then cfg.Callback() end
+    end)
+
+    local ctrl = {
+        Frame = row,
+        Hit = hit,
+        Set = function(newTitle, newDesc, color)
+            if title and newTitle then title.Text = tostring(newTitle) end
+            if desc and newDesc then
+                desc.Text = tostring(newDesc)
+                if color then desc.TextColor3 = color end
+            end
+        end,
+        SetBusy = function(on)
+            busy = on and true or false
+            hit.Active = not busy
+        end,
+        Get = function()
+            return title and title.Text or "", desc and desc.Text or ""
+        end,
+    }
+    if cfg.Key or cfg.key then
+        self.Rows[cfg.Key or cfg.key] = ctrl
+    end
+    return ctrl
+end
+
 function Tab:RowButton(cfg)
     local row = baseRow(self, ROW_H)
     addTitle(row, cfg, 8)
