@@ -63,7 +63,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.1.0"
+UI.Version = "1.2.0"
 
 -- ============================================================
 -- 主题（与原面板一致）
@@ -122,6 +122,8 @@ local SIZE = {
     checkboxSm = 22,   -- 子行勾选框
 }
 UI.Theme = T
+UI.Layout = LAYOUT
+UI.Size = SIZE
 
 local FONT        = Enum.Font.Gotham
 local FONT_BOLD   = Enum.Font.GothamBold
