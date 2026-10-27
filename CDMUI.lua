@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.0
+    CDMUI 1.3.2
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -13,7 +13,15 @@
 
     配置表在 UI.Theme / UI.Layout / UI.Size，创建窗口前可以改。
 
+    创建窗口的常用选项：
+        Title            标题
+        AutoOpen         创建后是否自动显示，默认 true
+        AutoUnlockMouse  面板打开时是否解锁鼠标，默认 true
+        TopbarButton     是否生成左上角顶栏按钮，默认 true
+
 --]]
+-- CDMUI v1.3.2  面板打开自动解锁鼠标（双方案兜底）；面板位置上移
+-- CDMUI v1.3.1  开关面板自动解锁/恢复鼠标；修复面板尺寸缩小与垂直居中
 -- CDMUI v1.3.0  重新加载自动销毁旧实例；Expand 支持 Cycle 模式；新增 ClickableRow；指引停留延长到 5 秒
 -- CDMUI v1.2.0  新增 Section / ColorPicker / Dropdown / TextBox / Progress 控件
 
@@ -28,7 +36,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.0"
+UI.Version = "1.3.2"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -112,8 +120,8 @@ local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
 
 -- 移动端：面板更宽更矮、行更高（手指点得准）、Tab 平分整行、字号加大
 local LAYOUT = {
-    panelW      = IS_MOBILE and 560 or 460,
-    panelH      = IS_MOBILE and 620 or 580,
+    panelW      = IS_MOBILE and 520 or 460,
+    panelH      = IS_MOBILE and 600 or 580,
     rowH        = IS_MOBILE and 72 or 58,
     titleSize   = IS_MOBILE and 34 or 30,
     tabHeight   = IS_MOBILE and 52 or 44,
@@ -153,10 +161,10 @@ local LAYOUT = {
     subBoxSize  = IS_MOBILE and 26 or 22,     -- 子行勾选框尺寸
 
     -- 自适应缩放边距（移动端留更多给刘海/手势区）
-    scaleMarginX = IS_MOBILE and 0.96 or 0.92,
-    scaleMarginY = IS_MOBILE and 0.88 or 0.85,
-    scaleMin     = IS_MOBILE and 0.35 or 0.45,
-    scaleMax     = IS_MOBILE and 1.25 or 1.15,
+    scaleMarginX = IS_MOBILE and 0.94 or 0.92,
+    scaleMarginY = IS_MOBILE and 0.86 or 0.85,
+    scaleMin     = IS_MOBILE and 0.55 or 0.45,
+    scaleMax     = IS_MOBILE and 1.10 or 1.15,
 }
 
 local PANEL_W, PANEL_H = LAYOUT.panelW, LAYOUT.panelH
@@ -982,7 +990,7 @@ function UI.Create(opts)
         Name = "Panel",
         Size = UDim2.new(0, PANEL_W, 0, PANEL_H),
         AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Position = UDim2.new(0.5, 0, 0.5, 10),   -- 略微上移，视觉更平衡
         BackgroundColor3 = T.panel,
         BackgroundTransparency = 0.05,
         BorderSizePixel = 0,
@@ -1076,9 +1084,12 @@ function UI.Create(opts)
             end
         end))
     end
-    -- 进场初始态
-    panel.Size = UDim2.new(0, PANEL_W * 0.94, 0, PANEL_H * 0.94)
+    -- 进场初始态：只改透明度，不动 Size（否则会永久缩小）
+    panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
     panel.BackgroundTransparency = 1
+
+    -- 打开面板时自动解锁鼠标（默认开启，可传 AutoUnlockMouse = false 关闭）
+    self.AutoUnlockMouse = (opts.AutoUnlockMouse ~= false)
 
     bindShieldClose(self)
 
@@ -1234,7 +1245,9 @@ function Window:_PlayIntro()
 
             -- 显示主面板并播放入场
             panel.Visible = true
-            if self.Scale then self.Scale.Scale = 0 end
+            self:_UnlockMouse()
+            -- 不要设 0（否则面板完全不可见，且难以恢复）
+            if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.9 end
             panel.BackgroundTransparency = 1
 
             for _, w in ipairs(self:_ContentParts()) do
@@ -1248,6 +1261,7 @@ function Window:_PlayIntro()
                 w.BackgroundTransparency = math.min(1, bt + 0.6)
             end
 
+            panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
             Anim.to(panel, { BackgroundTransparency = 0.05 }, 0.24,
                 Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
             if self.Scale then
@@ -1648,6 +1662,91 @@ function Window:_ShowButtonGuide()
     end)
 end
 
+-- 解锁鼠标（记录原状态；游戏每帧可能强制锁定，所以持续覆盖）
+-- 方案二：拦截写入。游戏想把 MouseBehavior 改回锁定，这里直接改成 Default
+function Window:_HardLockMouse(on)
+    if on then
+        if self._mouseHooked then return end
+        local ok = pcall(function()
+            local mt = getrawmetatable(game)
+            if not mt or mt.__newindex == nil then return end
+            local old = mt.__newindex
+            setreadonly(mt, false)
+            mt.__newindex = newcclosure(function(obj, key, value)
+                if self._mouseHooked and self.Visible
+                   and obj == UserInputService and key == "MouseBehavior" then
+                    return old(obj, key, Enum.MouseBehavior.Default)
+                end
+                return old(obj, key, value)
+            end)
+            setreadonly(mt, true)
+            self._origNewIndex = old
+            self._mouseHooked = true
+        end)
+        return ok
+    else
+        if not self._mouseHooked then return end
+        self._mouseHooked = false
+        pcall(function()
+            if not self._origNewIndex then return end
+            local mt = getrawmetatable(game)
+            setreadonly(mt, false)
+            mt.__newindex = self._origNewIndex
+            setreadonly(mt, true)
+        end)
+        self._origNewIndex = nil
+    end
+end
+
+function Window:_UnlockMouse()
+    if not self.AutoUnlockMouse then return end
+    if self._mouseLoop then return end
+    self._mouseLoop = true
+
+    -- 方案一：每帧写 Default；连写几次都被改回去就切方案二
+    task.spawn(function()
+        local fails = 0
+        while self._mouseLoop and not self.Destroyed do
+            if self.Visible then
+                pcall(function()
+                    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+                    UserInputService.MouseIconEnabled = true
+                end)
+
+                task.wait(0.05)
+
+                if self.Visible then
+                    local isDefault = false
+                    pcall(function()
+                        isDefault = (UserInputService.MouseBehavior == Enum.MouseBehavior.Default)
+                    end)
+
+                    if self.Visible and not isDefault then
+                        fails = fails + 1
+                        if fails >= 4 and not self._mouseHooked then
+                            -- 方案一压不住，切方案二
+                            self:_HardLockMouse(true)
+                        end
+                    else
+                        fails = 0
+                    end
+                end
+            else
+                fails = 0
+            end
+            task.wait(0.02)
+        end
+        if self._mouseHooked then self:_HardLockMouse(false) end
+        self._mouseLoop = false
+    end)
+end
+
+-- 恢复鼠标
+function Window:_RestoreMouse()
+    if self._mouseHooked then self:_HardLockMouse(false) end
+    self._mouseLoop = false
+end
+
 function Window:SetVisible(visible, instant)
     if self.Destroyed then return end
 
@@ -1676,6 +1775,12 @@ function Window:SetVisible(visible, instant)
         self.Gui.Enabled = true
         -- 加载动画会把 Panel 藏起来，这里必须恢复
         panel.Visible = true
+        -- 恢复尺寸与缩放（关闭动画会把它们缩小）
+        panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+        if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
+
+        -- 打开面板时自动解锁鼠标
+        self:_UnlockMouse()
 
         -- 清掉可能残留的指引（它会挡住点击）
         if self._guideGui then
@@ -1695,7 +1800,7 @@ function Window:SetVisible(visible, instant)
         end
 
         if instant then
-            panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+            panel.Position = UDim2.new(0.5, 0, 0.5, 10)
             panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
             panel.BackgroundTransparency = BASE_TRANS
             if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
@@ -1734,7 +1839,7 @@ function Window:SetVisible(visible, instant)
 
             -- 面板：上浮 + 淡入 + 弹性放大
             Anim.to(panel, {
-                Position = UDim2.new(0.5, 0, 0.5, 0),
+                Position = UDim2.new(0.5, 0, 0.5, 10),
                 BackgroundTransparency = BASE_TRANS,
             }, 0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 
@@ -1764,7 +1869,7 @@ function Window:SetVisible(visible, instant)
         if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.88 end
 
         -- 面板：弹性放大（Back 过冲）
-        Anim.to(panel, { Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.34,
+        Anim.to(panel, { Position = UDim2.new(0.5, 0, 0.5, 10) }, 0.34,
             Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
         if self.Scale then Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.42,
             Enum.EasingStyle.Back, Enum.EasingDirection.Out) end
@@ -1789,6 +1894,9 @@ function Window:SetVisible(visible, instant)
         end
 
     else
+        -- 恢复鼠标状态
+        self:_RestoreMouse()
+
         if instant then
             self.Gui.Enabled = false
             return
@@ -1826,7 +1934,7 @@ function Window:SetVisible(visible, instant)
                         pcall(function() self:_ShowButtonGuide() end)
                     end)
                 end
-                self.Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+                self.Panel.Position = UDim2.new(0.5, 0, 0.5, 10)
                 self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
                 if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
                 for _, w in ipairs(contentParts()) do
