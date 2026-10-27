@@ -1272,6 +1272,7 @@ function Window:_ShowButtonGuide()
     end
     if not guideGui.Parent then return end
     self.GuideShown = true
+    self._guideGui = guideGui
 
     -- 光圈跟随按钮位置（每帧更新，处理按钮被挤后移的情况）
     local ring = mk("Frame", {
@@ -1624,6 +1625,25 @@ function Window:SetVisible(visible, instant)
 
     if self.Visible then
         self.Gui.Enabled = true
+        -- 加载动画会把 Panel 藏起来，这里必须恢复
+        panel.Visible = true
+
+        -- 清掉可能残留的指引（它会挡住点击）
+        if self._guideGui then
+            pcall(function() self._guideGui:Destroy() end)
+            self._guideGui = nil
+        end
+        local okc, containers = pcall(function()
+            return { CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }
+        end)
+        if okc then
+            for _, container in ipairs(containers) do
+                if container then
+                    local g = container:FindFirstChild("CDMUIGuide")
+                    if g then pcall(function() g:Destroy() end) end
+                end
+            end
+        end
 
         if instant then
             panel.Position = UDim2.new(0.5, 0, 0.5, 0)
