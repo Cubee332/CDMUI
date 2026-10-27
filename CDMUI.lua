@@ -1,56 +1,17 @@
 --[[
-    CDMUI v1.0.0
-    ────────────────────────────────────────────────────────────────
-    Roblox / Luau 单文件控制面板 UI 库。零依赖，loadstring 直载。
-    本库只包含 UI 框架与通用控件，不含任何游戏逻辑。
+    CDMUI 1.2.0
 
-    特性：
-      · 控件：Toggle / Slider / Cycle / Input / Keybind / MultiSelect /
-              Expand / Label / Divider / Buttons
-      · 统一色阶与尺寸规范，改一处全局生效
-      · 完整动效：面板进出场、Tab 收起展开、子项逐行撑开、
-                  勾选框缩放弹出、循环按钮滑动、按钮按压回弹
-      · PC / 移动端自适应（LAYOUT 表统一管理两套尺寸）
+    Roblox 控制面板 UI 库，单文件，无外部依赖。
 
     用法：
-      local UI = loadstring(game:HttpGet(".../CDMUI.lua"))()
+        local UI = loadstring(game:HttpGet(".../CDMUI.lua"))()
+        local win = UI.Create({ Title = "面板" })
+        local tab = win:Tab("基础")
 
-      local win = UI.Create({ Title = "控制面板" })
-      local tab = win:Tab("基础")
+        tab:Toggle({ Key = "k1", Title = "开关", Default = false })
+        tab:Slider({ Key = "k2", Title = "滑条", Min = 0, Max = 100 })
 
-      tab:Toggle({
-          Key = "feature_a",
-          Title = "功能 A",
-          Desc = "说明文字",
-          Default = false,
-          Callback = function(v) print("feature_a", v) end,
-      })
-
-      tab:Slider({
-          Key = "value_b",
-          Title = "数值 B",
-          Min = 0, Max = 100, Step = 1, Default = 50,
-      })
-
-      tab:Expand({
-          Key = "group_c",
-          Title = "分组 C",
-          Desc = "可展开的子项",
-          Children = {
-              { Kind = "toggle", Key = "sub_1", Title = "子开关" },
-              { Kind = "number", Key = "sub_2", Title = "子数值", Min = 1, Max = 20, Default = 4 },
-              { Kind = "cycle",  Key = "sub_3", Title = "子选项", Options = { "A", "B" } },
-          },
-      })
-
-      tab:Buttons({
-          Buttons = {
-              { Text = "取消", Variant = "secondary" },
-              { Text = "确定", Variant = "primary", Callback = function() end },
-          },
-      })
-
-      win:Notify("已加载")
+    配置表在 UI.Theme / UI.Layout / UI.Size，创建窗口前可以改。
 --]]
 
 local TweenService = game:GetService("TweenService")
@@ -65,9 +26,7 @@ local LocalPlayer = Players.LocalPlayer
 local UI = {}
 UI.Version = "1.2.0"
 
--- ============================================================
--- 主题（与原面板一致）
--- ============================================================
+-- 主题色
 local T = {
     -- 面板
     panel       = Color3.fromRGB(15, 15, 18),
@@ -90,7 +49,7 @@ local T = {
     tabText     = Color3.fromRGB(220, 220, 220),
     tabTextOn   = Color3.fromRGB(15, 15, 18),
 
-    -- 控件统一底色（勾选框 / 箭头 / 循环 / 输入框 共用同一明度基准）
+    -- 控件底色
     ctrl        = Color3.fromRGB(38, 38, 45),
     ctrlHover   = Color3.fromRGB(50, 50, 58),
     ctrlStroke  = Color3.fromRGB(70, 70, 82),
@@ -103,7 +62,7 @@ local T = {
     danger      = Color3.fromRGB(226, 96, 96),
 }
 
--- 兼容旧字段名
+-- 旧字段名兼容
 T.box        = T.ctrl
 T.boxStroke  = T.ctrlStroke
 T.arrowBg    = T.ctrl
@@ -112,7 +71,7 @@ T.arrowText  = T.ctrlText
 T.cycleBg    = T.ctrl
 T.cycleHover = T.ctrlHover
 
--- 统一尺寸规范（所有控件共用）
+-- 尺寸
 local SIZE = {
     radius     = 6,    -- 控件圆角
     radiusRow  = 4,    -- 行圆角
@@ -129,10 +88,8 @@ local FONT        = Enum.Font.Gotham
 local FONT_BOLD   = Enum.Font.GothamBold
 local FONT_BLACK  = Enum.Font.GothamBlack
 
--- ============================================================
--- 平台适配
--- ============================================================
--- 判定方式与 Roblox 官方一致：TouchEnabled 且没有键盘 → 移动端
+-- 平台判定
+-- 有触摸且没键盘算移动端
 local IS_TOUCH = UserInputService.TouchEnabled
 local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
 
@@ -158,7 +115,7 @@ local LAYOUT = {
     padGap      = IS_MOBILE and 8 or 6,
     childH      = IS_MOBILE and 44 or 36,
 
-    -- 控件层尺寸（移动端统一放大，手指点得准）
+    -- 控件尺寸
     sliderW     = IS_MOBILE and 170 or 150,   -- 滑动条轨道宽
     sliderH     = IS_MOBILE and 8 or 6,       -- 轨道高
     knobSize    = IS_MOBILE and 18 or 14,     -- 拖柄直径
@@ -190,9 +147,7 @@ local ROW_H = LAYOUT.rowH
 
 local CLICK_SFX = "rbxassetid://8617766509"
 
--- ============================================================
--- 工具
--- ============================================================
+-- 工具函数
 local function mk(class, props, parent)
     local inst = Instance.new(class)
     if props then
@@ -288,9 +243,7 @@ local function adaptiveScale()
     return math.clamp(s, LAYOUT.scaleMin, LAYOUT.scaleMax)
 end
 
--- ============================================================
--- 动效层：所有动画统一从这里走，避免各控件各写一套导致闪
--- ============================================================
+-- 动画
 local Anim = {}
 
 -- 基础补间
@@ -345,9 +298,7 @@ end
 
 UI.Anim = Anim
 
--- ============================================================
--- 触屏适配
--- ============================================================
+-- 触屏
 function UI.ApplyTouchTweaks(gui)
     if not IS_TOUCH then return end
 
@@ -386,7 +337,7 @@ function UI.ApplyTouchTweaks(gui)
 end
 
 -- ============================================================
--- 控件工厂（统一主题）
+-- 控件工厂
 -- ============================================================
 
 -- 勾选框（原版方块样式 + 弹动动画）
@@ -415,7 +366,7 @@ local function makeCheckbox(parent, size, rightOffset, onChange)
     corner(box, 4)
     local st = stroke(box, T.boxStroke, 1, 0.3)
 
-    -- 对勾用文字字形（Gotham 支持 ✓）
+    -- 对勾
     local mark = mk("TextLabel", {
         Name = "Mark",
         Size = UDim2.new(1, 0, 1, 0),
@@ -519,7 +470,7 @@ local function makeCheckbox(parent, size, rightOffset, onChange)
     }
 end
 
--- 统一按钮：primary / secondary / danger / ghost
+-- 按钮样式
 local function makeButton(parent, cfg)
     local variant = cfg.Variant or "secondary"
     local w = cfg.Width or 88
@@ -568,7 +519,7 @@ local function makeButton(parent, cfg)
     return btn
 end
 
--- 数字输入（统一主题，替代原版突兀的蓝灰快捷按钮）
+-- 数字输入
 local function makeNumberInput(parent, cfg, onChange)
     local holder = mk("Frame", {
         Name = "NumInput",
@@ -618,7 +569,7 @@ local function makeNumberInput(parent, cfg, onChange)
         commit()
     end)
 
-    -- 快捷值：统一成 ghost 变体，跟主题一致
+-- 快捷值按钮
     if cfg.Quick then
         local qw, gap = 46, 4
         local startX = -(LAYOUT.inputW + 8) - (#cfg.Quick) * (46 + 4) - 6
@@ -643,8 +594,8 @@ local function makeNumberInput(parent, cfg, onChange)
     }
 end
 
--- 循环选择：原版子项用 110x26 蓝紫底，这里统一主题但保留足够宽度
--- 移动端再加宽加大，保证手指点得到两侧箭头
+-- 循环选择
+-- 移动端加宽，方便点两侧箭头
 local function makeCycle(parent, options, index, onChange)
     index = index or 1
     local w = LAYOUT.cycleW
@@ -707,7 +658,7 @@ local function makeCycle(parent, options, index, onChange)
 
     local function apply(delta)
         index = ((index - 1 + delta) % #options) + 1
-        -- 文字横向滑出 → 切换 → 从另一侧滑入
+        -- 文字横向滑出，换字后从另一侧滑入
         local outX = delta > 0 and -10 or 10
         local inX = -outX
         local basePos = UDim2.fromOffset(arrowW, 0)
@@ -1104,7 +1055,7 @@ function UI.Create(opts)
     return self
 end
 
--- 面板进出场：
+-- 面板显示/隐藏：
 --   不再从 BackgroundTransparency = 1 起步（那会让面板变透明、游戏画面透出来）
 --   改用「缩放 + 位移 + 轻微淡化」，底色始终存在，观感干净
 function Window:SetVisible(visible, instant)
@@ -1161,7 +1112,7 @@ function Window:SetVisible(visible, instant)
         task.delay(0.16, function()
             if not self.Visible and self.Gui then
                 self.Gui.Enabled = false
-                -- 复位，保证下次进场从干净状态开始
+                -- 复位，下次进场从这开始
                 self.Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
                 self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
                 self.Panel.BackgroundTransparency = BASE_TRANS
@@ -1270,7 +1221,7 @@ end
 -- ============================================================
 -- Tab 切换：整体朝滚动区顶部收 / 从顶部展开
 -- ============================================================
--- 关键约束：
+-- 约束：
 --   1) 子项在 ScrollingFrame + UIListLayout 下，只能用 Size 动画（Position 会被布局覆盖）
 --   2) 高度变化会重算 CanvasSize，若 CanvasPosition=0 则内容始终贴着顶部，观感正确
 --   3) 不要手动冻结 AutomaticCanvasSize，容易算出错误的画布高度
@@ -1281,7 +1232,7 @@ function Window:SelectTab(index, instant)
     local last = self.TabIndex
     self.TabIndex = index
 
-    -- 保证 Tab 宽度始终是「平分整行」，防止被其他逻辑覆盖
+    -- Tab 宽度重算，避免被别处覆盖
     self:LayoutTabs()
 
     -- Tab 按钮状态
@@ -1301,7 +1252,7 @@ function Window:SelectTab(index, instant)
         return w:GetAttribute("__baseH")
     end
 
-    -- 把某页所有行恢复为「完整高度 + 可见」或「0 高度 + 隐藏」
+    -- 整页切换到 显示/隐藏 状态
     local function setPage(t, visible)
         for _, w in ipairs(t.Widgets) do
             if w and w.Parent and w.Name ~= "ChildRow" then
@@ -1351,7 +1302,7 @@ function Window:SelectTab(index, instant)
         end
     end
 
-    -- ===== 1) 收起：所有行高度 → 0（越靠下越早收，形成向上吸走） =====
+    -- 1) 收起：高度归零，靠下的行先收
     for idx, w in ipairs(oldRows) do
         local fromBottom = (#oldRows - idx) * STAGGER_OUT
         Anim.to(w, {
@@ -1359,7 +1310,7 @@ function Window:SelectTab(index, instant)
         }, COLLAPSE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In, fromBottom)
     end
 
-    -- ===== 2) 收起完成 → 切页 → 展开 =====
+    -- 2) 切页并展开
     task.delay(COLLAPSE_TIME + #oldRows * STAGGER_OUT + 0.04, function()
         if self.Destroyed or self.TabIndex ~= index then return end
 
@@ -1479,9 +1430,7 @@ function Window:Destroy()
     if self.Gui then self.Gui:Destroy() end
 end
 
--- ============================================================
--- 行构造（原版 25,25,30 / 圆角 4 / 高 58）
--- ============================================================
+-- 行构造
 local function baseRow(tab, height)
     local row = mk("Frame", {
         Name = "Row",
@@ -1578,10 +1527,10 @@ function Tab:Expand(cfg)
     addTitle(row, cfg, 8)
     addDesc(row, cfg, 30)
 
-    -- 右侧控件列：最右是勾选框，勾选框左边是展开箭头
+    -- 勾选框在最右，箭头在它左边
     -- makeCheckbox(size, rightOffset) 实际布局：
     --   hit 宽 = size + 16，右边缘在 rightOffset
-    --   box 居中在 hit 内 → box 右边缘 = rightOffset - 8
+--   box 在 hit 内居中，右边缘 = rightOffset - 8
     local ARROW_W = LAYOUT.arrowSize
     local CHECK_W = 28
     local CHECK_EDGE = 8                       -- 勾选框 hit 距行右
@@ -1907,7 +1856,7 @@ function Tab:Expand(cfg)
                 end
             end
         end
-        -- 统一用 ▼，靠旋转 180° 变成 ▲（v 旋转后还是 v，所以不能用它）
+        -- 用 ▼ 旋转 180° 表示展开
         arrowBtn.Text = "▼"
         local fullSize = UDim2.fromOffset(ARROW_W, ARROW_W)
         if animate then
@@ -2298,9 +2247,7 @@ function Tab:MultiSelect(cfg)
     self.Rows[key] = ctrl
     return ctrl
 end
--- ============================================================
--- Body2D：标准 Roblox R6 小人，点选身体部位
--- ============================================================
+-- 人体图选部位
 -- 用方块拼出 R6 角色比例：
 --     头部 1.0 : 躯干 2.0 宽 x 2.0 高 : 手臂 1.0 x 2.0 : 腿 1.0 x 2.0
 -- 视觉上接近 Roblox 默认角色。
