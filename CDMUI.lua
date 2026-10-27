@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.4.8
+    CDMUI 1.4.9
     Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
     ────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@
        只能用真实鼠标/手指操作。
     4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
 --]]
--- CDMUI v1.4.8  悬停回调加动画期检查，彻底修掉入场时提前亮块
+-- CDMUI v1.4.9  悬停屏蔽改为每行独立，滑到位即恢复
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -169,7 +169,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.8"
+UI.Version = "1.4.9"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1985,8 +1985,10 @@ function Window:_PlayIntro()
 
                 local maxRows = math.min(#rows, 14)
 
-                -- 入场期间禁止悬停高亮
-                self._rowAnimating = true
+                -- 入场期间每行各自屏蔽悬停
+                for i = 1, maxRows do
+                    pcall(function() rows[i]:SetAttribute("__introBusy", true) end)
+                end
 
                 -- 顺便把可交互元素按住
                 local savedActive = {}
@@ -2042,11 +2044,11 @@ function Window:_PlayIntro()
                         -- 单行动画 0.42 秒，间隔 0.08 -> 前一行刚播 20% 后一行就起步
                         -- Tab 滚动 1.15 秒，行动画从 0.30 秒（约 26%）就起步，
                         -- 两条动画大部分时间并行，衔接更紧
-                        local startAt = 0.30 + (i - 1) * 0.075
+                        local startAt = 0.28 + (i - 1) * 0.055
                         task.delay(startAt, function()
                             if self.Destroyed or UI.IsStale() then return end
                             -- 滑回原位
-                            TweenService:Create(w, TweenInfo.new(0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                            TweenService:Create(w, TweenInfo.new(0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
                                 Position = basePos,
                                 BackgroundTransparency = baseT,
                             }):Play()
@@ -2059,21 +2061,25 @@ function Window:_PlayIntro()
                                 end)
                             end
 
-                            -- 这一行播完后恢复交互
-                            task.delay(0.40, function()
+                            -- 这一行播完就恢复交互
+                            task.delay(0.34, function()
                                 if self.Destroyed then return end
                                 setRowActive(w, true)
+                                -- 这一行播完就允许悬停，不用等别的行
+                                pcall(function() w:SetAttribute("__introBusy", false) end)
                             end)
                         end)
                     end)
                 end
 
-                -- 兜底：整段动画结束后统一恢复交互和悬停
-                task.delay(0.30 + maxRows * 0.075 + 0.60, function()
+                -- 兜底保险：正常情况下上面已经解除，这里只防止某行没跑到
+                task.delay(0.28 + maxRows * 0.055 + 0.40, function()
                     if self.Destroyed then return end
-                    self._rowAnimating = false
                     for i = 1, maxRows do
-                        if rows[i] then setRowActive(rows[i], true) end
+                        if rows[i] then
+                            setRowActive(rows[i], true)
+                            pcall(function() rows[i]:SetAttribute("__introBusy", false) end)
+                        end
                     end
                 end)
             end)
@@ -3322,12 +3328,15 @@ local function baseRow(tab, height)
 
     -- 悬停高亮：入场动画期间直接忽略，
     -- 否则鼠标提前停在某行上时，那一行会在文字还不透明时就先亮出一块底色
+    -- 每行自己的入场标志：播完这一行就立刻允许悬停，
+    -- 不用等全部行播完
+    row:SetAttribute("__introBusy", false)
     row.MouseEnter:Connect(function()
-        if tab.Window._rowAnimating then return end
+        if row:GetAttribute("__introBusy") then return end
         tween(row, 0.12, { BackgroundColor3 = T.rowHover, BackgroundTransparency = 0.1 })
     end)
     row.MouseLeave:Connect(function()
-        if tab.Window._rowAnimating then return end
+        if row:GetAttribute("__introBusy") then return end
         tween(row, 0.12, { BackgroundColor3 = T.row, BackgroundTransparency = 0.15 })
     end)
     return row
