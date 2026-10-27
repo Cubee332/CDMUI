@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.5
+    CDMUI 1.3.6
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,6 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
+-- CDMUI v1.3.6  加载完成再加 2 秒保护期；指引不再被点击或开面板打断
 -- CDMUI v1.3.5  加载动画期间禁止关闭面板；指引改为 5 秒
 -- CDMUI v1.3.4  修复指引时长被旧的 2 秒计时覆盖；顶栏按钮加出现动画
 -- CDMUI v1.3.3  顶栏按钮延后到加载动画结束创建；指引时长延长
@@ -39,7 +40,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.5"
+UI.Version = "1.3.6"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -1294,8 +1295,12 @@ function Window:_PlayIntro()
                 end
             end
 
-            -- 加载完成，解除关闭锁
-            self.Busy = false
+            -- 加载完成后还有 2 秒保护期，避免刚出来就被手快的点掉
+            task.delay(2.0, function()
+                if not self.Destroyed then
+                    self.Busy = false
+                end
+            end)
             -- 不要设 0（否则面板完全不可见，且难以恢复）
             if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.9 end
             panel.BackgroundTransparency = 1
@@ -1676,17 +1681,8 @@ function Window:_ShowButtonGuide()
         end
     end)
 
-    -- 提前取消
-    local endConn
-    endConn = UserInputService.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch
-            or input.UserInputType == Enum.UserInputType.Keyboard then
-            if endConn then pcall(function() endConn:Disconnect() end) end
-            fadeOutAll()
-        end
-    end)
+    -- 不再因为点击而提前中断，让它自然播完
+    local endConn = nil
 
     -- 正常结束：停留 5 秒
     task.delay(5.0, function()
@@ -1818,11 +1814,8 @@ function Window:SetVisible(visible, instant)
         -- 打开面板时自动解锁鼠标
         self:_UnlockMouse()
 
-        -- 清掉可能残留的指引（它会挡住点击）
-        if self._guideGui then
-            pcall(function() self._guideGui:Destroy() end)
-            self._guideGui = nil
-        end
+        -- 指引不销毁：让它自己播完，期间面板照常可用。
+        -- 它 Active=false，不会拦截任何点击。
         local okc, containers = pcall(function()
             return { CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }
         end)
