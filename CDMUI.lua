@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.7
+    CDMUI 1.3.8
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,6 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
+-- CDMUI v1.3.8  误触保护期从 2 秒改为 1 秒
 -- CDMUI v1.3.7  加运行代际，重复运行时旧实例的加载动画立即中止
 -- CDMUI v1.3.6  加载完成再加 2 秒保护期；指引不再被点击或开面板打断
 -- CDMUI v1.3.5  加载动画期间禁止关闭面板；指引改为 5 秒
@@ -41,7 +42,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.7"
+UI.Version = "1.3.8"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -1315,8 +1316,8 @@ function Window:_PlayIntro()
                 end
             end
 
-            -- 加载完成后还有 2 秒保护期，避免刚出来就被手快的点掉
-            task.delay(2.0, function()
+            -- 加载完成后还有 1 秒保护期，避免刚出来就被手快的点掉
+            task.delay(1.0, function()
                 if not self.Destroyed and not UI.IsStale() then
                     self.Busy = false
                 end
