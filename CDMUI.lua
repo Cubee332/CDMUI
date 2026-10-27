@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.6
+    CDMUI 1.3.7
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,6 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
+-- CDMUI v1.3.7  加运行代际，重复运行时旧实例的加载动画立即中止
 -- CDMUI v1.3.6  加载完成再加 2 秒保护期；指引不再被点击或开面板打断
 -- CDMUI v1.3.5  加载动画期间禁止关闭面板；指引改为 5 秒
 -- CDMUI v1.3.4  修复指引时长被旧的 2 秒计时覆盖；顶栏按钮加出现动画
@@ -40,13 +41,17 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.6"
+UI.Version = "1.3.7"
 
 -- ============================================================
 -- 重新运行时的自清理
 -- ============================================================
 -- 每次加载时，如果上次的实例还在，先把它完整销毁（断开连接、移除 UI），
 -- 避免重复运行导致面板叠加、功能重复触发。
+-- 运行代际：每次加载自增，异步任务靠它判断自己是否已被新的运行取代
+_G._CDMUIRunGen = (_G._CDMUIRunGen or 0) + 1
+local RUN_GEN = _G._CDMUIRunGen
+
 if type(_G._CDMUILastCleanup) == "function" then
     pcall(_G._CDMUILastCleanup)
 end
@@ -54,6 +59,11 @@ _G._CDMUILastCleanup = nil
 
 -- 实例登记表：Window:Destroy 时会把清理函数塞进来
 _G._CDMUILiveWindows = {}
+
+-- 对外暴露：判断当前加载是否已被取代
+UI.IsStale = function()
+    return _G._CDMUIRunGen ~= RUN_GEN
+end
 
 -- 主题色
 local T = {
@@ -1140,8 +1150,10 @@ function UI.Create(opts)
     table.insert(_G._CDMUILiveWindows, self)
     _G._CDMUILastCleanup = function()
         for _, w in ipairs(_G._CDMUILiveWindows or {}) do
-            if type(w) == "table" and w.Destroyed ~= true and w.Destroy then
-                pcall(function() w:Destroy() end)
+            if type(w) == "table" and w.Destroyed ~= true then
+                -- 先摘掉 Busy，避免它卡在加载态
+                w.Busy = false
+                if w.Destroy then pcall(function() w:Destroy() end) end
             end
         end
         _G._CDMUILiveWindows = {}
@@ -1159,7 +1171,7 @@ function UI.Create(opts)
         self.Gui.Enabled = true
         self.Panel.Visible = false
         task.defer(function()
-            if not self.Destroyed then self:_PlayIntro() end
+            if not self.Destroyed and not UI.IsStale() then self:_PlayIntro() end
         end)
     end
 
@@ -1171,6 +1183,9 @@ end
 --   改用「缩放 + 位移 + 轻微淡化」，底色始终存在，观感干净
 -- 首次运行的加载 + 欢迎动画
 function Window:_PlayIntro()
+    -- 被新的运行取代了就别再播动画
+    if UI.IsStale() or self.Destroyed then return end
+
     local gui = self.Gui
     local panel = self.Panel
 
@@ -1280,6 +1295,11 @@ function Window:_PlayIntro()
             Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
         task.delay(0.22, function()
+            -- 已经被新的运行取代，收干净走人
+            if UI.IsStale() or self.Destroyed then
+                if splash.Parent then splash:Destroy() end
+                return
+            end
             if splash.Parent then splash:Destroy() end
 
             -- 显示主面板并播放入场
@@ -1297,7 +1317,7 @@ function Window:_PlayIntro()
 
             -- 加载完成后还有 2 秒保护期，避免刚出来就被手快的点掉
             task.delay(2.0, function()
-                if not self.Destroyed then
+                if not self.Destroyed and not UI.IsStale() then
                     self.Busy = false
                 end
             end)
