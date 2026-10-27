@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.2
+    CDMUI 1.3.3
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,6 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
+-- CDMUI v1.3.3  顶栏按钮延后到加载动画结束创建；指引时长延长到 8 秒
 -- CDMUI v1.3.2  面板打开自动解锁鼠标（双方案兜底）；面板位置上移
 -- CDMUI v1.3.1  开关面板自动解锁/恢复鼠标；修复面板尺寸缩小与垂直居中
 -- CDMUI v1.3.0  重新加载自动销毁旧实例；Expand 支持 Cycle 模式；新增 ClickableRow；指引停留延长到 5 秒
@@ -36,7 +37,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.2"
+UI.Version = "1.3.3"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -1093,10 +1094,10 @@ function UI.Create(opts)
 
     bindShieldClose(self)
 
-    -- 左上角按钮（AutoOpen=false 时用）
-    if opts.TopbarButton ~= false then
-        pcall(createTopbarButton, self, opts.TopbarText)
-    end
+    -- 左上角按钮：先记下选项，等加载动画放完再创建，
+    -- 否则开局就跟面板一起弹出来，显得很突然。
+    self._topbarPending = (opts.TopbarButton ~= false)
+    self._topbarText = opts.TopbarText
 
     -- 触屏适配（仅移动端生效）
     pcall(UI.ApplyTouchTweaks, gui)
@@ -1114,14 +1115,16 @@ function UI.Create(opts)
     end
 
     -- 默认直接显示（原版是点顶栏按钮才弹，这里给个 AutoOpen 选项）
+    -- 不自动打开时，按钮立刻就建（没有加载动画要等）
+    if opts.AutoOpen == false and self._topbarPending then
+        self._topbarPending = false
+        pcall(createTopbarButton, self, self._topbarText)
+    end
+
     if opts.AutoOpen ~= false then
         self.Visible = true
         self.Gui.Enabled = true
         self.Panel.Visible = false
-        -- 顶栏按钮进入激活态
-        if self.TopbarSetActive then
-            pcall(self.TopbarSetActive, true)
-        end
         task.defer(function()
             if not self.Destroyed then self:_PlayIntro() end
         end)
@@ -1246,6 +1249,15 @@ function Window:_PlayIntro()
             -- 显示主面板并播放入场
             panel.Visible = true
             self:_UnlockMouse()
+
+            -- 加载动画到这里算放完了，这时才挂顶栏按钮
+            if self._topbarPending then
+                self._topbarPending = false
+                pcall(createTopbarButton, self, self._topbarText)
+                if self.TopbarSetActive then
+                    pcall(self.TopbarSetActive, true)
+                end
+            end
             -- 不要设 0（否则面板完全不可见，且难以恢复）
             if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.9 end
             panel.BackgroundTransparency = 1
@@ -1655,8 +1667,8 @@ function Window:_ShowButtonGuide()
         end
     end)
 
-    -- 指引停留 5 秒（比之前的 2.3 秒更长，方便看清）
-    task.delay(5.0, function()
+    -- 指引停留 8 秒，够看清也够跟手
+    task.delay(8.0, function()
         if endConn then pcall(function() endConn:Disconnect() end) end
         finish()
     end)
