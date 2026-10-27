@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.4.5
+    CDMUI 1.4.6
     Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
     ────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@
        只能用真实鼠标/手指操作。
     4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
 --]]
--- CDMUI v1.4.5  功能行改为从左往右依次插入并与 Tab 滚动重叠；滚动条抽搐修复
+-- CDMUI v1.4.6  功能行入场提前到 Tab 滚动的 26% 处，两条动画基本并行
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -169,7 +169,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.5"
+UI.Version = "1.4.6"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1967,9 +1967,9 @@ function Window:_PlayIntro()
 
                         -- 等 Tab 动画播完，然后每行间隔 0.08 秒依次滑入
                         -- 单行动画 0.42 秒，间隔 0.08 -> 前一行刚播 20% 后一行就起步
-                        -- Tab 滚动 1.15 秒，行动画从 0.55 秒（约一半）就开始，
-                        -- 两者后半段重叠，衔接更自然
-                        local startAt = 0.55 + (i - 1) * 0.075
+                        -- Tab 滚动 1.15 秒，行动画从 0.30 秒（约 26%）就起步，
+                        -- 两条动画大部分时间并行，衔接更紧
+                        local startAt = 0.30 + (i - 1) * 0.075
                         task.delay(startAt, function()
                             if self.Destroyed or UI.IsStale() then return end
                             -- 滑回原位
