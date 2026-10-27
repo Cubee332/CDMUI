@@ -20,7 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
--- CDMUI v1.3.11  Cycle 按钮宽度自适应最长选项；面板字号再调大一档
+-- CDMUI v1.4.0  Tab 栏改为横向滚动（自适应宽度/平滑居中/拖动手势/滚到底零空白）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -33,7 +33,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.11"
+UI.Version = "1.4.0"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -1051,12 +1051,21 @@ function UI.Create(opts)
     }, panel)
 
     -- Tab 栏
-    local tabBar = mk("Frame", {
+    local tabBar = mk("ScrollingFrame", {
         Name = "TabBar",
-        Size = UDim2.new(1, -LAYOUT.padX * 2, 0, LAYOUT.tabHeight),
+        Size = UDim2.new(1, -LAYOUT.padX * 2, 0, LAYOUT.tabHeight + 6),
         Position = UDim2.new(0, LAYOUT.padX, 0, LAYOUT.tabY),
         BackgroundTransparency = 1,
+        BorderSizePixel = 0,
         ZIndex = 3,
+        ScrollingDirection = Enum.ScrollingDirection.X,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = Color3.fromRGB(120, 120, 130),
+        ScrollBarImageTransparency = 0.35,
+        ElasticBehavior = Enum.ElasticBehavior.Never,
+        Active = true,
+        ClipsDescendants = true,
     }, panel)
 
     self.TabBar = tabBar
@@ -1066,6 +1075,92 @@ function UI.Create(opts)
     table.insert(self.Connections, tabBar:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
         self:LayoutTabs()
     end))
+
+    -- Tab 栏拖动：只有从 Tab 栏范围内起手才生效
+    do
+        local bar = tabBar
+        local dragging, dragMoved = false, false
+        local dragStartX, dragStartY, dragStartCanvas = 0, 0, 0
+        local lastDragX = 0
+
+        local function inBar(px, py)
+            local ap, sz = bar.AbsolutePosition, bar.AbsoluteSize
+            return px >= ap.X and px <= ap.X + sz.X
+               and py >= ap.Y and py <= ap.Y + sz.Y
+        end
+
+        -- 拖动期间把 Tab 按钮全禁掉，松手就不会触发 Activated
+        local function setTabsActive(on)
+            for _, tb in ipairs(self.Tabs) do
+                pcall(function() tb.Button.Active = on end)
+            end
+        end
+
+        local function onBegin(input)
+            if not bar.ScrollingEnabled then return end
+            local it = input.UserInputType
+            if it ~= Enum.UserInputType.Touch and it ~= Enum.UserInputType.MouseButton1 then return end
+            if not inBar(input.Position.X, input.Position.Y) then return end
+            dragging = true
+            dragMoved = false
+            dragStartX = input.Position.X
+            dragStartY = input.Position.Y
+            lastDragX = input.Position.X
+            dragStartCanvas = bar.CanvasPosition.X
+        end
+
+        local function onMove(input)
+            if not dragging then return end
+            local it = input.UserInputType
+            if it ~= Enum.UserInputType.Touch and it ~= Enum.UserInputType.MouseMovement then return end
+            local curX = input.Position.X
+            local dy = input.Position.Y - dragStartY
+            local dx = curX - dragStartX
+
+            if not dragMoved
+               and math.abs(dx) > 18
+               and math.abs(dx) > math.abs(dy) * 1.5 then
+                dragMoved = true
+                setTabsActive(false)
+                -- 判定成拖动这一刻重新取基准，别把判定距离补上去
+                dragStartX = curX
+                lastDragX = curX
+                return
+            end
+            if not dragMoved then return end
+
+            local sc2 = (self.Scale and self.Scale.Scale) or 1
+            if sc2 <= 0 then sc2 = 1 end
+            local maxX = math.max(0, bar.CanvasSize.X.Offset * sc2 - bar.AbsoluteSize.X)
+            -- 手指移动 1px（已缩放），内容要移动 1px（已缩放）
+            -- 但 CanvasPosition 是未缩放坐标，所以要乘 sc2 才对得上
+            local step = (lastDragX - curX)
+            lastDragX = curX
+            local target = math.clamp(bar.CanvasPosition.X + step, 0, maxX)
+            bar.CanvasPosition = Vector2.new(target, 0)
+        end
+
+        local function onEnd(input)
+            if not dragging then return end
+            local it = input.UserInputType
+            if it == Enum.UserInputType.Touch or it == Enum.UserInputType.MouseButton1 then
+                dragging = false
+                if dragMoved then
+                    getgenv()._CDMUITabDragBlock = os.clock() + 0.15
+                end
+                dragMoved = false
+                lastDragX = 0
+                -- 延迟恢复，确保这次松手已经处理完
+                task.delay(0.15, function()
+                    setTabsActive(true)
+                end)
+            end
+        end
+
+        table.insert(self.Connections, UserInputService.InputBegan:Connect(onBegin))
+        table.insert(self.Connections, UserInputService.InputChanged:Connect(onMove))
+        table.insert(self.Connections, UserInputService.InputEnded:Connect(onEnd))
+    end
 
     -- 列表
     local list = mk("ScrollingFrame", {
@@ -2031,10 +2126,13 @@ function Window:Tab(name)
             tween(btn, 0.12, { BackgroundColor3 = T.tabIdle })
         end
     end)
-    bindTap(btn, function()
+    -- Tab 点击：Activated 只在真正点击时触发，拖动不会误触
+    table.insert(self.Connections, btn.Activated:Connect(function()
+        local blockUntil = getgenv()._CDMUITabDragBlock
+        if blockUntil and os.clock() < blockUntil then return end
         playClick()
         self:SelectTab(tabIndex)
-    end)
+    end))
 
     self:LayoutTabs()
 
@@ -2065,26 +2163,135 @@ function Window:LayoutTabs()
         barW = PANEL_W - LAYOUT.padX * 2
     end
 
-    local each = math.floor((barW - GAP * (n - 1)) / n)
-    each = math.max(40, each)
+    -- 每个 Tab 按文字长度给足宽度，放不下就横向滚动
+    local MIN_W = IS_MOBILE and 140 or 124
+    local PAD_W = 40
+    local widths, total = {}, 0
+    for i, tb in ipairs(self.Tabs) do
+        local label = tostring(tb.Name or "")
+        local len = utf8.len(label) or #label
+        local w = math.max(MIN_W, len * (IS_MOBILE and 17 or 15) + PAD_W)
+        widths[i] = w
+        total = total + w
+    end
+    total = total + GAP * (n - 1)
 
-    -- Tab 数量多时自动缩小字号，避免文字溢出
-    local fontSize = LAYOUT.tabTextSize
-    if each < 82 then fontSize = math.max(11, LAYOUT.tabTextSize - 1) end
-    if each < 60 then fontSize = math.max(10, LAYOUT.tabTextSize - 3) end
+    local each = nil
+    if total < barW then
+        each = math.floor((barW - GAP * (n - 1)) / n)
+    end
 
-    -- 手动定位（不再依赖 UIListLayout，避免它按内容宽度反算导致溢出）
-    for i, t in ipairs(self.Tabs) do
-        t.Button.Size = UDim2.new(0, each, 1, 0)
-        t.Button.Position = UDim2.new(0, (i - 1) * (each + GAP), 0, 0)
-        t.Button.TextSize = fontSize
-        t.Button.TextTruncate = Enum.TextTruncate.AtEnd
-        t.Button.LayoutOrder = i
+    for i, tb in ipairs(self.Tabs) do
+        local w = each or widths[i]
+        tb.Button.Size = UDim2.new(0, w, 1, -5)
+        tb.Button.Position = UDim2.new(0, (i - 1) * (w + GAP), 0, 0)
+        tb.Button.TextSize = LAYOUT.tabTextSize
+        tb.Button.TextTruncate = Enum.TextTruncate.None
+        tb.Button.LayoutOrder = i
     end
 
     self._tabBarW = barW
-    self._tabEachW = each
+    self._tabEachW = each or MIN_W
+
+    if self.TabBar then
+        if total > barW then
+            -- 画布正好等于最后一个 Tab 的右边缘，滚到头就是贴边，不留空白
+            local lastBtn = self.Tabs[n].Button
+            local contentRight = lastBtn.Position.X.Offset + lastBtn.Size.X.Offset
+            -- 实测关系：maxX = CanvasSize * sc - 栏宽
+            -- 要让 maxX 刚好等于「最后一个 Tab 滚到贴边所需的量」，
+            --   needScroll 单位是未缩放坐标，maxX 也是未缩放
+            --   => CanvasSize = (needScroll * sc + 栏宽) / sc
+            local sc2 = (self.Scale and self.Scale.Scale) or 1
+            if sc2 <= 0 then sc2 = 1 end
+            local barW2 = self.TabBar.AbsoluteSize.X
+            -- 实测：maxX = CanvasSize * sc - 栏宽
+            -- 要让 maxX 等于 contentRight - 栏宽/sc（最后一个刚好贴右）
+            --   contentRight * sc - 栏宽 + 栏宽 = contentRight * sc
+            -- 直接按 contentRight 走，滚到底正好贴边
+            self.TabBar.CanvasSize = UDim2.new(0, contentRight, 0, 0)
+            self.TabBar.ScrollingEnabled = true
+            self.TabBar.ScrollBarThickness = 3
+        else
+            self.TabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
+            self.TabBar.ScrollingEnabled = false
+            self.TabBar.ScrollBarThickness = 0
+            self.TabBar.CanvasPosition = Vector2.new(0, 0)
+            for _, tbb in ipairs(self.Tabs) do
+                tbb.Button.Size = UDim2.new(0, tbb.Button.Size.X.Offset, 1, 0)
+            end
+        end
+    end
 end
+
+-- 切 Tab 时把它平滑滚到可视区中间
+function Window:_ScrollTabIntoView(index)
+    local bar = self.TabBar
+    if not bar or not bar.ScrollingEnabled then return end
+    local tb = self.Tabs[index]
+    if not tb then return end
+
+    local sc = (self.Scale and self.Scale.Scale) or 1
+    if sc <= 0 then sc = 1 end
+
+    local btn = tb.Button
+    local barW = bar.AbsoluteSize.X
+    local viewW = barW / sc - bar.ScrollBarThickness / sc
+    -- 实测：maxX = CanvasSize * sc - 栏宽
+    local maxX = math.max(0, bar.CanvasSize.X.Offset * sc - barW)
+
+    -- 第一个直接到最左，最后一个直接到最右
+    if index <= 1 then
+        self:_TweenTabScroll(0)
+        return
+    end
+    if index >= #self.Tabs then
+        self:_TweenTabScroll(maxX)
+        return
+    end
+
+    -- 中间：布局坐标算未缩放滚动量，再乘 sc 换成 CanvasPosition
+    local bpos = btn.Position.X.Offset
+    local bsize = btn.Size.X.Offset
+    local needScroll = bpos + bsize / 2 - viewW / 2
+    local target = math.clamp(needScroll, 0, maxX)
+
+    self:_TweenTabScroll(target)
+end
+
+-- 平滑滚动到指定 CanvasPosition.X
+function Window:_TweenTabScroll(target, onDone)
+    local bar = self.TabBar
+    if not bar then return end
+
+    local from = bar.CanvasPosition.X
+    if math.abs(target - from) < 1 then
+        bar.CanvasPosition = Vector2.new(target, 0)
+        if onDone then task.defer(onDone) end
+        return
+    end
+
+    self._tabScrollToken = (self._tabScrollToken or 0) + 1
+    local token = self._tabScrollToken
+    local t0 = os.clock()
+
+    task.spawn(function()
+        while true do
+            if self._tabScrollToken ~= token or self.Destroyed then return end
+            local a = math.clamp((os.clock() - t0) / 0.26, 0, 1)
+            a = 1 - (1 - a) ^ 3
+            pcall(function()
+                bar.CanvasPosition = Vector2.new(from + (target - from) * a, 0)
+            end)
+            if a >= 1 then
+                if onDone then task.defer(onDone) end
+                return
+            end
+            RunService.RenderStepped:Wait()
+        end
+    end)
+end
+
 -- ============================================================
 -- Tab 切换：整体朝滚动区顶部收 / 从顶部展开
 -- ============================================================
@@ -2143,6 +2350,14 @@ function Window:SelectTab(index, instant)
             BackgroundColor3 = active and T.tabActive or T.tabIdle,
             TextColor3 = active and T.tabTextOn or T.tabText,
         }, Enum.EasingStyle.Quad)
+    end
+
+    -- 让选中的 Tab 平滑滚到可视区中间
+    if self._ScrollTabIntoView then
+        task.defer(function()
+            if self.Destroyed then return end
+            pcall(function() self:_ScrollTabIntoView(index) end)
+        end)
     end
 
     -- 记录行原始高度
