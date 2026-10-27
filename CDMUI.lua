@@ -2289,6 +2289,211 @@ function Tab:MultiSelect(cfg)
     self.Rows[key] = ctrl
     return ctrl
 end
+-- ============================================================
+-- Body2D：标准 Roblox R6 小人，点选身体部位
+-- ============================================================
+-- 用方块拼出 R6 角色比例：
+--     头部 1.0 : 躯干 2.0 宽 x 2.0 高 : 手臂 1.0 x 2.0 : 腿 1.0 x 2.0
+-- 视觉上接近 Roblox 默认角色。
+function Tab:Body2D(cfg)
+    local parts = cfg.Parts or {
+        { Key = 1, Name = "头部" },
+        { Key = 2, Name = "躯干" },
+        { Key = 3, Name = "左臂" },
+        { Key = 4, Name = "右臂" },
+        { Key = 5, Name = "左腿" },
+        { Key = 6, Name = "右腿" },
+    }
+
+    local row = mk("Frame", {
+        Name = "BodyRow",
+        Size = UDim2.new(1, -12, 0, 250),
+        BackgroundColor3 = T.row,
+        BackgroundTransparency = 0.15,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        ZIndex = 4,
+        Active = false,
+        LayoutOrder = (self.Items + 1) * 1000,
+        Visible = (self.Window.TabIndex == #self.Window.Tabs),
+    }, self.Container)
+    corner(row, SIZE.radiusRow)
+    self.Items = self.Items + 1
+    table.insert(self.Widgets, row)
+
+    local key = cfg.Key or cfg.key
+    local selected = cfg.Default or 1
+    self.Window.State[key] = selected
+
+    mk("TextLabel", {
+        Name = "Title",
+        Size = UDim2.new(1, -100, 0, 22),
+        Position = UDim2.new(0, 12, 0, 8),
+        BackgroundTransparency = 1,
+        Text = cfg.Name or cfg.name or cfg.Title or "",
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.rowTitle,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 5,
+        Active = false,
+    }, row)
+
+    mk("TextLabel", {
+        Name = "Desc",
+        Size = UDim2.new(1, -100, 0, 18),
+        Position = UDim2.new(0, 12, 0, 30),
+        BackgroundTransparency = 1,
+        Text = cfg.Desc or cfg.desc or "",
+        TextColor3 = T.textDim,
+        Font = FONT,
+        TextSize = LAYOUT.rowDesc,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 5,
+        Active = false,
+    }, row)
+
+    -- 当前选中提示
+    local info = mk("TextLabel", {
+        Name = "Info",
+        Size = UDim2.new(0, 100, 0, 20),
+        Position = UDim2.new(1, -112, 0, 12),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextColor3 = T.accent,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.rowDesc,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        ZIndex = 5,
+        Active = false,
+    }, row)
+
+    -- ============ 小人画布 ============
+    -- R6 比例（单位 = 像素）：
+    --   头 26x26 | 躯干 34x38 | 臂 14x38 | 腿 16x38
+    local HX, HY = 26, 26       -- 头
+    local TW, TH = 34, 38       -- 躯干
+    local AW, AH = 14, 38       -- 臂
+    local LW, LH = 16, 38       -- 腿
+    local GAP = 2
+
+    local totalW = AW + GAP + TW + GAP + AW
+    local totalH = HY + 2 + TH + 2 + LH
+
+    local canvas = mk("Frame", {
+        Name = "Canvas",
+        Size = UDim2.fromOffset(totalW, totalH),
+        Position = UDim2.new(0.5, -totalW / 2, 0, 54),
+        BackgroundTransparency = 1,
+        ZIndex = 5,
+    }, row)
+
+    local COL_IDLE = Color3.fromRGB(58, 58, 68)
+    local COL_HOVER = Color3.fromRGB(78, 78, 92)
+    local COL_ON = T.accent
+
+    local buttons = {}
+
+    local function mkPart(px, py, w, h, idx, label)
+        local b = mk("TextButton", {
+            Name = "Part" .. idx,
+            Size = UDim2.fromOffset(w, h),
+            Position = UDim2.fromOffset(px, py),
+            BackgroundColor3 = COL_IDLE,
+            BorderSizePixel = 0,
+            Text = "",
+            AutoButtonColor = false,
+            ZIndex = 6,
+            Active = true,
+        }, canvas)
+        corner(b, 3)
+
+        local lbl = mk("TextLabel", {
+            Name = "Lbl",
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Text = label or "",
+            TextColor3 = Color3.fromRGB(150, 150, 162),
+            Font = FONT_BOLD,
+            TextSize = 10,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            TextYAlignment = Enum.TextYAlignment.Center,
+            ZIndex = 7,
+            Active = false,
+        }, b)
+
+        buttons[idx] = { btn = b, lbl = lbl }
+        return b
+    end
+
+    -- 布局：左臂 | 躯干 | 右臂，头和腿对齐躯干
+    local xArmL = 0
+    local xTorso = AW + GAP
+    local xArmR = xTorso + TW + GAP
+    local yHead = 0
+    local yTorso = HY + 2
+    local yLegs = yTorso + TH + 2
+
+    mkPart(xTorso + (TW - HX) / 2, yHead, HX, HY, 1, "头")
+    mkPart(xTorso, yTorso, TW, TH, 2, "躯干")
+    mkPart(xArmL, yTorso, AW, AH, 3, "左臂")
+    mkPart(xArmR, yTorso, AW, AH, 4, "右臂")
+    mkPart(xTorso + (TW - LW * 2 - GAP) / 2, yLegs, LW, LH, 5, "左腿")
+    mkPart(xTorso + (TW - LW * 2 - GAP) / 2 + LW + GAP, yLegs, LW, LH, 6, "右腿")
+
+    local function labelOf(idx)
+        for _, pt in ipairs(parts) do
+            if pt.Key == idx then return pt.Name end
+        end
+        return "?"
+    end
+
+    local function render()
+        for idx, entry in pairs(buttons) do
+            if idx == selected then
+                entry.btn.BackgroundColor3 = COL_ON
+                entry.lbl.TextColor3 = T.tabTextOn
+            else
+                entry.btn.BackgroundColor3 = COL_IDLE
+                entry.lbl.TextColor3 = Color3.fromRGB(150, 150, 162)
+            end
+        end
+        info.Text = labelOf(selected)
+    end
+
+    for idx, entry in pairs(buttons) do
+        entry.btn.MouseEnter:Connect(function()
+            if idx ~= selected then
+                Anim.to(entry.btn, { BackgroundColor3 = COL_HOVER }, 0.12)
+            end
+        end)
+        entry.btn.MouseLeave:Connect(function()
+            if idx ~= selected then
+                Anim.to(entry.btn, { BackgroundColor3 = COL_IDLE }, 0.12)
+            end
+        end)
+        bindTap(entry.btn, function()
+            selected = idx
+            render()
+            self.Window.State[key] = selected
+            if cfg.Callback then cfg.Callback(selected, labelOf(selected)) end
+        end)
+    end
+
+    render()
+
+    local ctrl = {
+        Get = function() return selected end,
+        Set = function(v)
+            selected = v
+            self.Window.State[key] = v
+            render()
+        end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
 function Tab:Divider()
     local row = mk("Frame", {
         Name = "Divider",
