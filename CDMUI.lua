@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.4.2
+    CDMUI 1.4.3
     Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
     ────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@
        只能用真实鼠标/手指操作。
     4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
 --]]
--- CDMUI v1.4.2  退出动画（重载/卸载时面板和顶栏按钮平滑淡出）；完善使用文档
+-- CDMUI v1.4.3  重载时等退出动画播完再建新面板；滚动条和残留元素一并淡出
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -169,7 +169,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.2"
+UI.Version = "1.4.3"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -267,6 +267,17 @@ function UI.PlayExitAnim(duration)
         end
     end
 
+    -- 动画播放到 80% 时把面板整个隐藏，彻底杜绝残影
+    task.delay(duration * 0.8, function()
+        for _, w in ipairs(wins) do
+            pcall(function()
+                if w.Panel and w.Panel.Parent then
+                    w.Panel.Visible = false
+                end
+            end)
+        end
+    end)
+
     -- 返回等待函数，调用方 await 它就能准确知道什么时候销毁
     return function()
         local t0 = os.clock()
@@ -286,7 +297,10 @@ _G._CDMUIRunGen = (_G._CDMUIRunGen or 0) + 1
 local RUN_GEN = _G._CDMUIRunGen
 
 if type(_G._CDMUILastCleanup) == "function" then
+    -- 先让旧面板播退出动画（这个调用会启动动画）
     pcall(_G._CDMUILastCleanup)
+    -- 等动画播完再往下建新面板，避免两个画面叠在一起
+    task.wait(0.28)
 end
 _G._CDMUILastCleanup = nil
 
@@ -1506,17 +1520,39 @@ function UI.Create(opts)
         UI.PlayExitAnim(0.22)
         _G._CDMUILiveWindows = {}
 
-        -- 延迟销毁
-        task.delay(0.24, function()
+        -- 延迟销毁：先全部设 Visible=false 兜底，再销毁
+        task.delay(0.26, function()
             for _, w in ipairs(old) do
                 pcall(function()
                     local gui = w.Gui
-                    if gui and gui.Parent then gui:Destroy() end
+                    if gui and gui.Parent then
+                        -- 兜底：先把所有可见元素按住，防止动画漏掉的元素闪一下
+                        for _, d in ipairs(gui:GetDescendants()) do
+                            pcall(function()
+                                if d:IsA("Frame") or d:IsA("TextLabel")
+                                   or d:IsA("TextButton") or d:IsA("TextBox")
+                                   or d:IsA("ImageLabel") or d:IsA("ImageButton")
+                                   or d:IsA("ScrollingFrame") then
+                                    d.Visible = d.Visible
+                                end
+                            end)
+                        end
+                        gui.Enabled = false
+                        gui:Destroy()
+                    end
                     local btn = w.TopbarBtn
                     if btn and btn.Parent then btn:Destroy() end
                 end)
             end
         end)
+
+        -- 返回等待函数，让新脚本知道动画还要播多久
+        return function()
+            local t0 = os.clock()
+            while os.clock() - t0 < 0.28 do
+                RunService.RenderStepped:Wait()
+            end
+        end
     end
 
     -- 默认直接显示（原版是点顶栏按钮才弹，这里给个 AutoOpen 选项）
