@@ -19,8 +19,10 @@ Roblox / Luau 单文件控制面板 UI 库。零依赖，`loadstring` 直载。
   - [Tab 方法](#tab-方法)
 - [控件详解](#控件详解)
 - [使用场景](#使用场景)
+- [移动端适配](#移动端适配)
 - [主题与自定义](#主题与自定义)
 - [常见问题](#常见问题)
+- [调试与故障排查](#调试与故障排查)
 
 ---
 
@@ -393,6 +395,113 @@ tab:Expand({
 | `"cycle"` | 左右切换 | `Options` |
 | `"slider"` | 滑动条 | `Min` / `Max` / `Step` / `Default` |
 
+### Body2D — 人体图选部位
+
+标准 Roblox R6 小人，点击选择身体部位。
+
+```lua
+tab:Body2D({
+    Key = "aim_part",
+    Name = "锁定部位",
+    Desc = "点击小人选择",
+    Default = 1,                  -- 默认选中第 1 项（头部）
+    Callback = function(idx, label)
+        print(idx, label)         -- 1, "头部"
+    end,
+    Parts = {
+        { Key = 1, Name = "头部" },
+        { Key = 2, Name = "躯干" },
+        { Key = 3, Name = "左臂" },
+        { Key = 4, Name = "右臂" },
+        { Key = 5, Name = "左腿" },
+        { Key = 6, Name = "右腿" },
+    },
+})
+```
+
+`Parts` 可以传任意数量（默认 6 个），但布局按 R6 六部位设计，改数量可能错位。
+
+### Dropdown — 下拉选择
+
+选项多时比 `Cycle` 好用。
+
+```lua
+tab:Dropdown({
+    Key = "mode",
+    Name = "模式",
+    Desc = "点开选择",
+    Options = { "选项一", "选项二", "选项三", "选项四" },
+    Default = "选项一",
+    Callback = function(value, index)
+        print(value, index)
+    end,
+})
+```
+
+超过 6 项时列表会限制高度（`min(n, 6) * 26px`）。
+
+### ColorPicker — 颜色选择
+
+色相条拖动，实时预览。
+
+```lua
+tab:ColorPicker({
+    Key = "tracer_color",
+    Name = "追踪线颜色",
+    Desc = "拖动色相条",
+    Default = Color3.fromRGB(255, 0, 0),
+    Callback = function(color)
+        print(color.R, color.G, color.B)
+    end,
+})
+```
+
+内部兼容 `Color3.toHSV` / `Color3.fromHSV` 缺失的环境（自带 RGB↔HSV 转换）。
+
+### TextBox — 文本输入
+
+非数字的文本输入（数字请用 `Input`）。
+
+```lua
+tab:TextBox({
+    Key = "config_name",
+    Name = "配置名称",
+    Desc = "输入后回车",
+    Default = "",
+    Placeholder = "请输入名称",
+    Callback = function(text) print(text) end,
+})
+```
+
+### Progress — 进度条
+
+只读展示，用于加载进度、血量百分比等。
+
+```lua
+local prog = tab:Progress({
+    Key = "load_progress",
+    Name = "加载进度",
+    Desc = "只读展示",
+    Value = 0.65,                 -- 0 ~ 1
+    Color = Color3.fromRGB(0, 200, 255),   -- 可选，默认白色
+})
+
+-- 后续更新
+prog.Set(0.8)
+```
+
+### Section — 分组标题
+
+给控件分组，带下划细线。
+
+```lua
+tab:Section({ Name = "战斗设置" })
+tab:Toggle({ ... })
+tab:Toggle({ ... })
+tab:Section({ Name = "视觉设置" })
+tab:Toggle({ ... })
+```
+
 ### Label — 文字说明
 
 ```lua
@@ -575,6 +684,61 @@ _G._MyCallbacks["my_toggle"](true)
 
 ---
 
+## 移动端适配
+
+库自动检测设备，无需手动配置：
+
+```lua
+local IS_TOUCH = UserInputService.TouchEnabled
+local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
+```
+
+（与 Roblox 官方判断一致：有触摸且没有键盘才算移动端）
+
+### 自动调整的项
+
+| 项 | PC | 移动端 |
+|---|---|---|
+| 面板尺寸 | 460 × 580 | 560 × 620 |
+| 行高 | 58 | 72 |
+| 标题字号 | 30 | 34 |
+| Tab 高 | 44 | 52 |
+| 行标题 / 描述 | 14 / 12 | 16 / 13 |
+| 勾选框 | 28 | 32 |
+| 展开箭头 | 34 | 38 |
+| 输入框 | 70 × 30 | 84 × 36 |
+| 滑动条 | 150 × 6 | 170 × 8 |
+| 循环按钮 | 160 × 28 | 190 × 32 |
+| 键位按钮 | 110 × 28 | 130 × 34 |
+| 多选 chip | 64 × 24 | 76 × 30 |
+| 控件字号 | 12 | 14 |
+
+### 移动端专属行为
+
+- **滚动条加粗** 到 6px，透明度降低
+- **惯性滚动** 开启（`ElasticBehavior.WhenScrollable`）
+- **拖动标题栏移动面板**（移动端没鼠标，这是必要功能）
+- **Tab 平分整行**，不留空白
+
+### 自定义尺寸
+
+`UI.Layout` 里的字段在**创建控件时**读取，所以修改必须发生在 `UI.Create` 之前：
+
+```lua
+local UI = loadstring(game:HttpGet("..."))()
+
+-- 必须在 UI.Create 之前修改
+UI.Layout.panelW = 520
+UI.Layout.panelH = 640
+UI.Layout.rowH = 64
+
+local win = UI.Create({ Title = "面板" })
+```
+
+已创建的控件不会跟随变化，需要重建面板。
+
+可改的字段见源码里 `LAYOUT` 表的定义，全部是纯数字，直接赋值即可。
+
 ## 主题与自定义
 
 ### 修改颜色
@@ -680,6 +844,70 @@ local win = UI.Create({ DisplayOrder = 50 })   -- 数值越小越靠后
 ```
 
 ---
+
+## 调试与故障排查
+
+### 检查面板是否加载
+
+```lua
+local win = getgenv().MyWin
+print(win ~= nil)
+print(#win.Tabs)          -- Tab 数量
+```
+
+### 检查控件状态
+
+```lua
+print(win.State)          -- 全部状态表
+print(win:Get("my_key"))  -- 单个值
+```
+
+### 检查控件是否创建
+
+```lua
+for _, tab in ipairs(win.Tabs) do
+    print("Tab:", tab.Name)
+    for _, w in ipairs(tab.Widgets) do
+        local title = w:FindFirstChild("Title") or w:FindFirstChild("ChildTitle")
+        print("  ", w.Name, title and title.Text or "")
+    end
+end
+```
+
+### 常见错误
+
+| 错误 | 原因 | 解决 |
+|---|---|---|
+| `attempt to call nil (field 'Create')` | 库没加载成功 | 检查 `HttpGet` 是否返回内容 |
+| `attempt to index nil with 'Parent'` | 面板已销毁但循环还在跑 | 循环里加 `win.Parent` 或状态检查 |
+| Tab 点击没反应 | `bindTap` 位移阈值 12px | 检查是否被其他 UI 覆盖 |
+| 控件不显示 | `Visible` 为 false | 切到对应 Tab 再看 |
+
+### 安全销毁
+
+```lua
+-- 会断开所有连接、销毁所有实例
+win:Destroy()
+```
+
+销毁后再调用任何方法都会静默失败（内部有 `Destroyed` 检查）。
+
+### 避免内存泄漏
+
+长时间运行的脚本，闭包里的连接需要手动管理：
+
+```lua
+-- 错误：每次调用都新增连接
+RunService.Heartbeat:Connect(function() ... end)
+
+-- 正确：只建一次，或者销毁时断开
+local conn
+if not conn then
+    conn = RunService.Heartbeat:Connect(function() ... end)
+end
+
+win:Destroy()  -- 记得清理
+```
 
 ## 许可
 
