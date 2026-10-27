@@ -1246,12 +1246,19 @@ function Window:LayoutTabs()
     end
 
     local each = math.floor((barW - GAP * (n - 1)) / n)
-    each = math.max(48, each)
+    each = math.max(40, each)
+
+    -- Tab 数量多时自动缩小字号，避免文字溢出
+    local fontSize = LAYOUT.tabTextSize
+    if each < 90 then fontSize = math.max(10, LAYOUT.tabTextSize - 2) end
+    if each < 70 then fontSize = math.max(9, LAYOUT.tabTextSize - 4) end
 
     -- 手动定位（不再依赖 UIListLayout，避免它按内容宽度反算导致溢出）
     for i, t in ipairs(self.Tabs) do
         t.Button.Size = UDim2.new(0, each, 1, 0)
         t.Button.Position = UDim2.new(0, (i - 1) * (each + GAP), 0, 0)
+        t.Button.TextSize = fontSize
+        t.Button.TextTruncate = Enum.TextTruncate.AtEnd
         t.Button.LayoutOrder = i
     end
 
@@ -2541,13 +2548,56 @@ end
 -- ColorPicker：颜色选择（色相条 + 饱和度亮度方块 + 预览）
 -- ============================================================
 function Tab:ColorPicker(cfg)
-    local row = baseRow(self, ROW_H + 34)
+    local row = baseRow(self, ROW_H + 46)
     addTitle(row, cfg, 8)
     addDesc(row, cfg, 30)
 
     local key = cfg.Key or cfg.key
     local col = cfg.Default or Color3.fromRGB(255, 255, 255)
-    local h, s, v = Color3.toHSV(col)
+
+    -- 兼容：部分环境可能没有 toHSV
+    local function toHSV(c)
+        if Color3.toHSV then
+            local ok, hh, ss, vv = pcall(Color3.toHSV, c)
+            if ok then return hh, ss, vv end
+        end
+        -- 简易 RGB -> HSV
+        local r, g, b = c.R, c.G, c.B
+        local mx = math.max(r, g, b)
+        local mn = math.min(r, g, b)
+        local d = mx - mn
+        local hh = 0
+        if d > 0 then
+            if mx == r then hh = ((g - b) / d) % 6
+            elseif mx == g then hh = (b - r) / d + 2
+            else hh = (r - g) / d + 4 end
+            hh = hh / 6
+        end
+        local ss = (mx > 0) and (d / mx) or 0
+        return hh, ss, mx
+    end
+
+    local function fromHSV(hh, ss, vv)
+        if Color3.fromHSV then
+            local ok, cc = pcall(Color3.fromHSV, hh, ss, vv)
+            if ok then return cc end
+        end
+        -- 简易 HSV -> RGB
+        local i = math.floor(hh * 6)
+        local f = hh * 6 - i
+        local p1 = vv * (1 - ss)
+        local q1 = vv * (1 - f * ss)
+        local t1 = vv * (1 - (1 - f) * ss)
+        i = i % 6
+        if i == 0 then return Color3.new(vv, t1, p1)
+        elseif i == 1 then return Color3.new(q1, vv, p1)
+        elseif i == 2 then return Color3.new(p1, vv, t1)
+        elseif i == 3 then return Color3.new(p1, q1, vv)
+        elseif i == 4 then return Color3.new(t1, p1, vv)
+        else return Color3.new(vv, p1, q1) end
+    end
+
+    local h, s, v = toHSV(col)
     self.Window.State[key] = col
 
     local SWATCH = 34
@@ -2570,7 +2620,7 @@ function Tab:ColorPicker(cfg)
     local hueBar = mk("Frame", {
         Name = "HueBar",
         Size = UDim2.new(1, -(PREVIEW_W + 8 + 8), 0, HUE_H),
-        Position = UDim2.new(0, 8, 1, -22),
+        Position = UDim2.new(0, 8, 1, -18),
         BackgroundColor3 = Color3.new(1, 1, 1),
         BorderSizePixel = 0,
         ZIndex = 6,
@@ -2610,7 +2660,7 @@ function Tab:ColorPicker(cfg)
     corner(hueKnob, 2)
 
     local function apply()
-        local c = Color3.fromHSV(h, s, v)
+        local c = fromHSV(h, s, v)
         preview.BackgroundColor3 = c
         hueKnob.Position = UDim2.new(h, -2, 0.5, -(HUE_H + 6) / 2)
         self.Window.State[key] = c
@@ -2641,8 +2691,8 @@ function Tab:ColorPicker(cfg)
     end)
 
     local ctrl = {
-        Get = function() return Color3.fromHSV(h, s, v) end,
-        Set = function(c) h, s, v = Color3.toHSV(c); apply() end,
+        Get = function() return fromHSV(h, s, v) end,
+        Set = function(c) local hh, ss, vv = toHSV(c); h, s, v = hh, ss, vv; apply() end,
     }
     self.Rows[key] = ctrl
     return ctrl
