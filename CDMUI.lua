@@ -1061,7 +1061,6 @@ end
 function Window:SetVisible(visible, instant)
     if self.Destroyed then return end
 
-    -- 只在真正的开关切换时播音效（instant 用于初始化，不播）
     if not instant and self.Visible ~= (visible and true or false) then
         playClick()
     end
@@ -1069,13 +1068,19 @@ function Window:SetVisible(visible, instant)
     self.Visible = visible and true or false
     local panel = self.Panel
 
-    -- 顶栏按钮高亮复位：面板开关后鼠标可能已不在按钮上，MouseLeave 不会触发
     if self.TopbarResetHover then
         pcall(self.TopbarResetHover)
     end
 
-    local BASE_TRANS = 0.05   -- 正常态
-    local FADE_TRANS = 0.35   -- 动画中间态（不完全透明）
+    local BASE_TRANS = 0.05
+
+    -- 面板里的内容行（Tab 栏 + 滚动区）
+    local function contentParts()
+        local parts = {}
+        if self.TabBar then table.insert(parts, self.TabBar) end
+        if self.List then table.insert(parts, self.List) end
+        return parts
+    end
 
     if self.Visible then
         self.Gui.Enabled = true
@@ -1084,38 +1089,82 @@ function Window:SetVisible(visible, instant)
             panel.Position = UDim2.new(0.5, 0, 0.5, 0)
             panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
             panel.BackgroundTransparency = BASE_TRANS
+            self.Scale.Scale = 1
+            for _, w in ipairs(contentParts()) do
+                w.Position = w:GetAttribute("__basePos") or w.Position
+                w.BackgroundTransparency = 0
+            end
             return
         end
 
-        -- 起点：略小、略下、略淡（但仍有底色）
-        panel.Position = UDim2.new(0.5, 0, 0.5, 18)
-        panel.Size = UDim2.new(0, PANEL_W * 0.97, 0, PANEL_H * 0.97)
-        panel.BackgroundTransparency = FADE_TRANS
+        -- 起点：稍微缩小、稍微下移
+        panel.Position = UDim2.new(0.5, 0, 0.5, 10)
+        panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+        panel.BackgroundTransparency = BASE_TRANS
+        if self.Scale then self.Scale.Scale = 0.88 end
 
-        Anim.to(panel, {
-            Position = UDim2.new(0.5, 0, 0.5, 0),
-            Size = UDim2.new(0, PANEL_W, 0, PANEL_H),
-            BackgroundTransparency = BASE_TRANS,
-        }, 0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        -- 面板：弹性放大（Back 过冲）
+        Anim.to(panel, { Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.34,
+            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        if self.Scale then Anim.to(self.Scale, { Scale = 1 }, 0.42,
+            Enum.EasingStyle.Back, Enum.EasingDirection.Out) end
+
+        -- 内容：上移 + 淡入，依次错开
+        local parts = contentParts()
+        local delay = 0.08
+        for _, w in ipairs(parts) do
+            if not w:GetAttribute("__basePos") then
+                w:SetAttribute("__basePos", w.Position)
+            end
+            local base = w:GetAttribute("__basePos")
+            w.Position = UDim2.new(base.X.Scale, base.X.Offset,
+                                   base.Y.Scale, base.Y.Offset + 14)
+            w.BackgroundTransparency = 1
+
+            Anim.to(w, {
+                Position = base,
+                BackgroundTransparency = 0,
+            }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
+            delay = delay + 0.06
+        end
+
     else
         if instant then
             self.Gui.Enabled = false
             return
         end
 
-        Anim.to(panel, {
-            Position = UDim2.new(0.5, 0, 0.5, 12),
-            Size = UDim2.new(0, PANEL_W * 0.98, 0, PANEL_H * 0.98),
-            BackgroundTransparency = FADE_TRANS,
-        }, 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        -- 收起：缩小 + 下沉 + 淡出
+        local parts = contentParts()
+        for i, w in ipairs(parts) do
+            local base = w:GetAttribute("__basePos") or w.Position
+            Anim.to(w, {
+                Position = UDim2.new(base.X.Scale, base.X.Offset,
+                                     base.Y.Scale, base.Y.Offset + 8),
+                BackgroundTransparency = 1,
+            }, 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+                (i - 1) * 0.02)
+        end
 
-        task.delay(0.16, function()
+        if self.Scale then
+            Anim.to(self.Scale, { Scale = 0.94 }, 0.16,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        end
+        Anim.to(panel, {
+            Position = UDim2.new(0.5, 0, 0.5, 8),
+        }, 0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+        task.delay(0.17, function()
             if not self.Visible and self.Gui then
                 self.Gui.Enabled = false
-                -- 复位，下次进场从这开始
                 self.Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
                 self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-                self.Panel.BackgroundTransparency = BASE_TRANS
+                if self.Scale then self.Scale.Scale = 1 end
+                for _, w in ipairs(contentParts()) do
+                    local base = w:GetAttribute("__basePos")
+                    if base then w.Position = base end
+                    w.BackgroundTransparency = 0
+                end
             end
         end)
     end
