@@ -20,16 +20,6 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
--- CDMUI v1.3.9  切换 Tab 时滚动与收起展开重叠进行；重复点当前 Tab 平滑滚回顶部
--- CDMUI v1.3.8  误触保护期从 2 秒改为 1 秒
--- CDMUI v1.3.7  加运行代际，重复运行时旧实例的加载动画立即中止
--- CDMUI v1.3.6  加载完成再加 2 秒保护期；指引不再被点击或开面板打断
--- CDMUI v1.3.5  加载动画期间禁止关闭面板；指引改为 5 秒
--- CDMUI v1.3.4  修复指引时长被旧的 2 秒计时覆盖；顶栏按钮加出现动画
--- CDMUI v1.3.3  顶栏按钮延后到加载动画结束创建；指引时长延长
--- CDMUI v1.3.2  面板打开自动解锁鼠标（双方案兜底）；面板位置上移
--- CDMUI v1.3.1  开关面板自动解锁/恢复鼠标；修复面板尺寸缩小与垂直居中
--- CDMUI v1.3.0  重新加载自动销毁旧实例；Expand 支持 Cycle 模式；新增 ClickableRow；指引停留延长到 5 秒
 -- CDMUI v1.2.0  新增 Section / ColorPicker / Dropdown / TextBox / Progress 控件
 
 local GuiService = game:GetService("GuiService")
