@@ -13,10 +13,9 @@
 
     配置表在 UI.Theme / UI.Layout / UI.Size，创建窗口前可以改。
 
-    更新记录：
-      1.3.0  重新加载自动销毁旧实例；Expand 支持 Cycle 模式；新增 ClickableRow；指引停留延长到 5 秒
-      1.2.0  新增 Section / ColorPicker / Dropdown / TextBox / Progress 控件
 --]]
+-- CDMUI v1.3.0  重新加载自动销毁旧实例；Expand 支持 Cycle 模式；新增 ClickableRow；指引停留延长到 5 秒
+-- CDMUI v1.2.0  新增 Section / ColorPicker / Dropdown / TextBox / Progress 控件
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -2460,12 +2459,15 @@ function Tab:Expand(cfg)
     local ARROW_RIGHT_OFFSET = CHECK_BOX_RIGHT + CHECK_W + GAP
 
     local ctrl
+    local arrowOffset = ARROW_RIGHT_OFFSET   -- 默认（有勾选框）
     if cfg.Cycle then
         -- 循环模式：右侧放一个左右切换的按钮，不用勾选框
         local cy = cfg.Cycle
         local opts = cy.Options or {}
         local idx = cy.DefaultIndex or 1
         local CW = IS_MOBILE and 96 or 82
+        -- 箭头放在循环按钮左侧，间距与其他行一致（GAP=12）
+        arrowOffset = CW + GAP + 10
 
         local cycBtn = mk("TextButton", {
             Name = "CycleBtn",
@@ -2517,7 +2519,7 @@ function Tab:Expand(cfg)
     local arrowBtn = mk("TextButton", {
         Name = "Arrow",
         Size = UDim2.fromOffset(ARROW_W, ARROW_W),
-        Position = UDim2.new(1, -ARROW_RIGHT_OFFSET, 0.5, 0),
+        Position = UDim2.new(1, -arrowOffset, 0.5, 0),
         AnchorPoint = Vector2.new(1, 0.5),
         BackgroundColor3 = T.arrowBg,
         Text = "▼",
