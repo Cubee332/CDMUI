@@ -14,6 +14,7 @@
     配置表在 UI.Theme / UI.Layout / UI.Size，创建窗口前可以改。
 --]]
 
+local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -820,6 +821,8 @@ local function createTopbarButton(self, labelText)
 
     bindTap(click, function()
         playClick()
+        -- 标记：这次是点顶栏按钮关闭的
+        if self.Visible then self._closedByTopbar = true end
         self:SetVisible(not self.Visible)
     end)
 
@@ -836,6 +839,8 @@ local function bindShieldClose(self)
             and mp.Y >= ap.Y and mp.Y <= ap.Y + asz.Y then
             return
         end
+        -- 标记：这次关闭来自点击边界外（由 SetVisible 内部消费）
+        self._closedByShield = true
         self:SetVisible(false)
     end)
 end
@@ -915,8 +920,10 @@ function UI.Create(opts)
     self.Gui = gui
 
     -- 自适应缩放（原版做法）
-    local scale = mk("UIScale", { Scale = adaptiveScale() }, gui)
+    local baseScale = adaptiveScale()
+    local scale = mk("UIScale", { Scale = baseScale }, gui)
     self.Scale = scale
+    self.BaseScale = baseScale
     pcall(function()
         local cam = workspace.CurrentCamera
         if cam and cam.GetPropertyChangedSignal then
@@ -977,6 +984,8 @@ function UI.Create(opts)
     }, panel)
 
     self.TabBar = tabBar
+    tabBar:SetAttribute("__basePos", tabBar.Position)
+    tabBar:SetAttribute("__baseTrans", tabBar.BackgroundTransparency)
     -- 布局尺寸变化后重新等分（首次 AbsoluteSize 可能为 0）
     table.insert(self.Connections, tabBar:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
         self:LayoutTabs()
@@ -1010,6 +1019,8 @@ function UI.Create(opts)
         SortOrder = Enum.SortOrder.LayoutOrder,
     }, list)
     self.List = list
+    list:SetAttribute("__basePos", list.Position)
+    list:SetAttribute("__baseTrans", list.BackgroundTransparency)
 
     -- 底部提示
     local hint = mk("TextLabel", {
@@ -1049,7 +1060,12 @@ function UI.Create(opts)
 
     -- 默认直接显示（原版是点顶栏按钮才弹，这里给个 AutoOpen 选项）
     if opts.AutoOpen ~= false then
-        self:SetVisible(true, true)
+        self.Visible = true
+        self.Gui.Enabled = true
+        self.Panel.Visible = false
+        task.defer(function()
+            if not self.Destroyed then self:_PlayIntro() end
+        end)
     end
 
     return self
@@ -1058,6 +1074,530 @@ end
 -- 面板显示/隐藏：
 --   不再从 BackgroundTransparency = 1 起步（那会让面板变透明、游戏画面透出来）
 --   改用「缩放 + 位移 + 轻微淡化」，底色始终存在，观感干净
+-- 首次运行的加载 + 欢迎动画
+function Window:_PlayIntro()
+    local gui = self.Gui
+    local panel = self.Panel
+
+    -- 隐藏主面板，先播加载
+    panel.Visible = false
+
+    local splash = mk("Frame", {
+        Name = "Splash",
+        Size = UDim2.new(0, 300, 0, 150),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = T.panel,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 100,
+    }, gui)
+    corner(splash, 10)
+    local st = stroke(splash, T.panelStroke, 1, 1)
+    local splashScale = mk("UIScale", { Scale = 0.85 }, splash)
+
+    -- 标题
+    local title = mk("TextLabel", {
+        Name = "SplashTitle",
+        Size = UDim2.new(1, 0, 0, 32),
+        Position = UDim2.new(0, 0, 0, 34),
+        BackgroundTransparency = 1,
+        Text = "CDMUI",
+        TextColor3 = T.text,
+        Font = FONT_BLACK,
+        TextSize = 26,
+        ZIndex = 101,
+    }, splash)
+
+    -- 加载文字
+    local status = mk("TextLabel", {
+        Name = "SplashStatus",
+        Size = UDim2.new(1, 0, 0, 20),
+        Position = UDim2.new(0, 0, 0, 68),
+        BackgroundTransparency = 1,
+        Text = "正在加载",
+        TextColor3 = T.textDim,
+        Font = FONT,
+        TextSize = 13,
+        ZIndex = 101,
+    }, splash)
+
+    -- 进度条
+    local track = mk("Frame", {
+        Name = "SplashTrack",
+        Size = UDim2.new(0, 220, 0, 4),
+        Position = UDim2.new(0.5, -110, 0, 104),
+        BackgroundColor3 = T.ctrl,
+        BorderSizePixel = 0,
+        ZIndex = 101,
+    }, splash)
+    corner(track, 2)
+
+    local fill = mk("Frame", {
+        Name = "SplashFill",
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = T.accent,
+        BorderSizePixel = 0,
+        ZIndex = 102,
+    }, track)
+    corner(fill, 2)
+
+    -- 淡入
+    Anim.to(splash, { BackgroundTransparency = 0.05 }, 0.22,
+        Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    Anim.to(st, { Transparency = 0.4 }, 0.22)
+    Anim.to(splashScale, { Scale = 1 }, 0.30,
+        Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+    -- 进度推进
+    local steps = {
+        { 0.18, 0.35, "正在加载界面" },
+        { 0.38, 0.70, "正在初始化控件" },
+        { 0.58, 1.00, "准备就绪" },
+    }
+    for _, s in ipairs(steps) do
+        local at, prog, txt = s[1], s[2], s[3]
+        task.delay(at, function()
+            if not splash.Parent then return end
+            Anim.to(fill, { Size = UDim2.new(prog, 0, 1, 0) }, 0.16,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            status.Text = txt
+        end)
+    end
+    local acc = 0.58
+
+    -- 播放完后切主面板
+    task.delay(acc + 0.30, function()
+        if not splash.Parent then return end
+
+        -- 淡出 splash
+        Anim.to(splash, { BackgroundTransparency = 1 }, 0.20,
+            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        Anim.to(st, { Transparency = 1 }, 0.20)
+        if title then Anim.to(title, { TextTransparency = 1 }, 0.16) end
+        if status then Anim.to(status, { TextTransparency = 1 }, 0.16) end
+        Anim.to(track, { BackgroundTransparency = 1 }, 0.16)
+        Anim.to(fill, { BackgroundTransparency = 1 }, 0.16)
+        Anim.to(splashScale, { Scale = 0.94 }, 0.20,
+            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+        task.delay(0.22, function()
+            if splash.Parent then splash:Destroy() end
+
+            -- 显示主面板并播放入场
+            panel.Visible = true
+            if self.Scale then self.Scale.Scale = 0 end
+            panel.BackgroundTransparency = 1
+
+            for _, w in ipairs(self:_ContentParts()) do
+                if not w:GetAttribute("__basePos") then
+                    w:SetAttribute("__basePos", w.Position)
+                end
+                local base = w:GetAttribute("__basePos")
+                local bt = w:GetAttribute("__baseTrans") or 1
+                w.Position = UDim2.new(base.X.Scale, base.X.Offset,
+                                       base.Y.Scale, base.Y.Offset + 16)
+                w.BackgroundTransparency = math.min(1, bt + 0.6)
+            end
+
+            Anim.to(panel, { BackgroundTransparency = 0.05 }, 0.24,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            if self.Scale then
+                Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.40,
+                    Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end
+
+            local delay = 0.10
+            for _, w in ipairs(self:_ContentParts()) do
+                local base = w:GetAttribute("__basePos")
+                Anim.to(w, {
+                    Position = base,
+                    BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
+                }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
+                delay = delay + 0.07
+            end
+        end)
+    end)
+end
+
+function Window:_ContentParts()
+    -- 记录原始透明度，动画结束后要还原（List 本身是透明的，不能改成 0）
+    local parts = {}
+    local function add(w)
+        if not w then return end
+        if w:GetAttribute("__basePos") == nil then
+            w:SetAttribute("__basePos", w.Position)
+        end
+        if w:GetAttribute("__baseTrans") == nil then
+            w:SetAttribute("__baseTrans", w.BackgroundTransparency)
+        end
+        table.insert(parts, w)
+    end
+    add(self.TabBar)
+    add(self.List)
+    return parts
+end
+
+-- 关闭面板后第一次，指示顶栏按钮的位置
+-- 纯装饰，Active=false 不拦截任何输入
+function Window:_ShowButtonGuide()
+    if not self.TopbarButton or self.GuideShown then return end
+
+    local btn = self.TopbarButton
+
+    -- 等按钮位置稳定
+    local waited = 0
+    while waited < 1.0 do
+        task.wait(0.1)
+        waited = waited + 0.1
+        if btn and btn.Parent and btn.AbsoluteSize.X > 0 then break end
+    end
+    if not btn or not btn.Parent then return end
+
+    -- 移动端：按钮在折叠菜单里，位置不可靠，改成中央提示
+    local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+    local guideGui = Instance.new("ScreenGui")
+    guideGui.Name = "CDMUIGuide"
+    guideGui.DisplayOrder = 999
+    -- 与 self.Gui 保持一致（false），坐标系天然对齐
+    guideGui.IgnoreGuiInset = false
+    guideGui.ResetOnSpawn = false
+    guideGui.Enabled = true
+    pcall(function() guideGui.Parent = CoreGui end)
+    if not guideGui.Parent then
+        pcall(function()
+            guideGui.Parent = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        end)
+    end
+    if not guideGui.Parent then return end
+    self.GuideShown = true
+
+    -- 光圈跟随按钮位置（每帧更新，处理按钮被挤后移的情况）
+    local ring = mk("Frame", {
+        Name = "Ring",
+        Size = UDim2.fromOffset(1, 1),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 201,
+        Active = false,
+    }, guideGui)
+    local ringStroke = mk("UIStroke", {
+        Color = T.accent,
+        Thickness = 2,
+        Transparency = 1,
+    }, ring)
+    corner(ring, 999)
+
+    local pulse = mk("Frame", {
+        Name = "Pulse",
+        Size = UDim2.fromOffset(1, 1),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = T.accent,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 200,
+        Active = false,
+    }, guideGui)
+    corner(pulse, 999)
+
+    local tip = mk("TextLabel", {
+        Name = "Tip",
+        Size = UDim2.fromOffset(IS_MOBILE and 160 or 180, IS_MOBILE and 26 or 30),
+        AnchorPoint = Vector2.new(0.5, 0),
+        BackgroundTransparency = 0.3,
+        BackgroundColor3 = T.panel,
+        Text = "点击这里打开",
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.rowDesc + 2,
+        TextStrokeTransparency = 0.4,
+        TextTransparency = 1,
+        ZIndex = 202,
+        Active = false,
+    }, guideGui)
+    corner(tip, 4)
+
+    -- 指向按钮的箭头（贴在提示框上方）
+    local arrow = mk("TextLabel", {
+        Name = "Arrow",
+        Size = UDim2.fromOffset(28, 22),
+        AnchorPoint = Vector2.new(0.5, 1),
+        BackgroundTransparency = 1,
+        Text = "▲",
+        TextColor3 = T.accent,
+        Font = FONT_BOLD,
+        TextSize = 20,
+        TextStrokeTransparency = 0.4,
+        TextTransparency = 1,
+        Rotation = 0,
+        ZIndex = 202,
+        Active = false,
+    }, guideGui)
+
+    -- 同步位置到按钮
+    local bouncing = true
+    local bounceStart = tick()
+    local BOUNCE_PERIOD = IS_MOBILE and 0.70 or 0.62   -- 弹跳周期
+    local BOUNCE_UP = IS_MOBILE and 11 or 14   -- 弹跳高度
+
+    -- 用缓动曲线算偏移，sync 每帧读它
+    local function bounceOffset()
+        if not bouncing then return 0 end
+        local phase = ((tick() - bounceStart) % BOUNCE_PERIOD) / BOUNCE_PERIOD
+
+        -- 0.00~0.18 快速上升
+        -- 0.18~0.24 顶点停顿
+        -- 0.24~0.55 落回（带一次小回弹）
+        -- 0.55~1.00 静止
+        if phase < 0.22 then
+            local p = phase / 0.22
+            return BOUNCE_UP * (1 - (1 - p) * (1 - p))   -- ease-out 上冲
+        elseif phase < 0.30 then
+            return BOUNCE_UP
+        elseif phase < 0.72 then
+            local p = (phase - 0.30) / 0.42
+            local base = BOUNCE_UP * (1 - p) * (1 - p)
+            local bump = math.sin(p * math.pi * 2) * BOUNCE_UP * 0.14
+            return math.max(0, base + bump)
+        end
+        return 0
+    end
+
+    local function sync()
+        if not guideGui.Parent then return end
+
+        -- 移动端：不跟按钮，固定顶部中央提示点击左上角
+        if isMobile then
+            local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
+            ring.Position = UDim2.fromOffset(vp.X / 2, 90)
+            pulse.Position = UDim2.fromOffset(vp.X / 2, 90)
+            pulse.Size = UDim2.fromOffset(0, 0)
+            tip.AnchorPoint = Vector2.new(0.5, 0)
+            tip.Text = "点左上角 ≡ 打开菜单"
+            arrow.AnchorPoint = Vector2.new(0.5, 1)
+            arrow.Rotation = 0
+            arrow:SetAttribute("__bx", vp.X / 2)
+            arrow:SetAttribute("__by", 106)
+            tip:SetAttribute("__bx", vp.X / 2)
+            tip:SetAttribute("__by", 108)
+            local off0 = bounceOffset()
+            arrow.Position = UDim2.fromOffset(vp.X / 2, 106 - off0)
+            tip.Position = UDim2.fromOffset(vp.X / 2, 108 - off0)
+            return
+        end
+
+        if not btn or not btn.Parent then return end
+        local sz = btn.AbsoluteSize
+        if sz.X <= 0 then return end
+
+        -- ===== 自适应：不写死任何数值，全部运行时探测 =====
+
+        -- 1) 顶栏高度：优先 GuiService，拿不到就取 max(视口高 * 0.06, 36)
+        local TOPBAR_H = nil
+        pcall(function()
+            local ins = GuiService:GetGuiInset()
+            if ins and ins.Y and ins.Y > 0 then TOPBAR_H = ins.Y end
+        end)
+        if not TOPBAR_H then
+            local vpY = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize.Y) or 720
+            TOPBAR_H = math.max(36, math.floor(vpY * 0.06))
+        end
+
+        -- 2) 按钮 x：AbsolutePosition.X 是准的
+        -- 3) 按钮 y：顶栏内垂直居中
+        -- 直接用按钮的 AbsolutePosition 求中心，不做任何 inset 补偿。
+        -- 实测：ScreenGui(IgnoreGuiInset=false) 与 TopbarStandard 的坐标系一致，
+        -- 额外加 inset 会导致重复偏移。
+        local cx = btn.AbsolutePosition.X + sz.X / 2
+        local cy = btn.AbsolutePosition.Y + sz.Y / 2
+
+        -- 4) 兜底：如果按钮 x 超出视口（极端情况），钳制回屏幕内
+        local vpX = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize.X) or 1280
+        cx = math.clamp(cx, sz.X / 2 + 8, vpX - sz.X / 2 - 8)
+
+        -- 光圈/脉冲每帧强制对齐按钮中心（脉冲的放大靠 UIScale，不改 Size）
+        ring.Position = UDim2.fromOffset(cx, cy)
+        ring.Size = UDim2.fromOffset(sz.X, sz.Y)
+        pulse.Position = UDim2.fromOffset(cx, cy)
+        pulse.Size = UDim2.fromOffset(sz.X, sz.Y)
+
+        -- 按钮底部 = 中心 + 半高
+        local below = cy + sz.Y / 2 + 4
+        if below > 0 then
+            arrow.AnchorPoint = Vector2.new(0.5, 1)
+            arrow.Rotation = 0
+            tip.AnchorPoint = Vector2.new(0.5, 0)
+            arrow:SetAttribute("__bx", cx)
+            arrow:SetAttribute("__by", below + 20)
+            tip:SetAttribute("__bx", cx)
+            tip:SetAttribute("__by", below + 22)
+        else
+            arrow.AnchorPoint = Vector2.new(0.5, 0)
+            arrow.Rotation = 180
+            tip.AnchorPoint = Vector2.new(0.5, 1)
+            arrow:SetAttribute("__bx", cx)
+            arrow:SetAttribute("__by", pos.Y + oy - 16)
+            tip:SetAttribute("__bx", cx)
+            tip:SetAttribute("__by", pos.Y + oy - 18)
+        end
+
+        -- 再按基准 + 弹跳偏移应用位置
+        local ax = arrow:GetAttribute("__bx")
+        local ay = arrow:GetAttribute("__by")
+        local tx = tip:GetAttribute("__bx")
+        local ty = tip:GetAttribute("__by")
+        local off = bounceOffset()
+        if ax and ay then
+            arrow.Position = UDim2.fromOffset(ax, ay - off)
+        end
+        if tx and ty then
+            tip.Position = UDim2.fromOffset(tx, ty - off)
+        end
+    end
+
+
+    sync()
+    local syncConn = RunService.Heartbeat:Connect(function()
+        pcall(sync)
+    end)
+
+    -- 箭头 + 文字向上弹跳，强化指向感
+
+
+    -- 主光圈：脉冲式（每次脉冲重新亮起再淡出）
+    local ringScale = mk("UIScale", { Scale = 1 }, ring)
+    ringStroke.Transparency = 1
+
+    -- 文字的出现时间线
+    local TIP_START = 0.16
+    local TIP_BOUNCES = 3        -- 文字多弹几下
+    local BOUNCE_STEP = 0.28
+
+    local finished = false
+    local pulseActive = true
+    local activeTweens = {}
+
+    -- 脉冲
+    local function doPulse(offset)
+        task.delay(offset, function()
+            if not guideGui.Parent or finished or not pulseActive then return end
+            sync()
+
+            ringScale.Scale = 1
+            ringStroke.Transparency = 0.15
+            local t1 = Anim.to(ringScale, { Scale = 1.55 }, 0.6,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            local t2 = Anim.to(ringStroke, { Transparency = 1 }, 0.6,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            if t1 then table.insert(activeTweens, t1) end
+            if t2 then table.insert(activeTweens, t2) end
+        end)
+    end
+
+    -- 脉冲循环：持续到结束，避免"光圈早消失、文字还在"的割裂感
+    task.spawn(function()
+        local wait0 = 0.05
+        local idx = 0
+        while not finished and guideGui.Parent and idx < 6 do
+            idx = idx + 1
+            doPulse(wait0)
+            task.wait(0.63)
+        end
+    end)
+
+    -- 文字淡入
+    task.delay(TIP_START, function()
+        if tip.Parent then
+            Anim.to(tip, { TextTransparency = 0 }, 0.24,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            Anim.to(arrow, { TextTransparency = 0 }, 0.24,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        end
+    end)
+
+    -- 结束：光圈和文字同时淡出
+    local function fadeOutAll()
+        if finished then return end
+        finished = true
+        if syncConn then pcall(function() syncConn:Disconnect() end) end
+        bouncing = false
+
+        -- 关键：先停掉所有脉冲动画和正在跑的补间，避免继续改 ringStroke
+        pulseActive = false
+        -- 停掉当前正在跑的补间
+        for _, tw in ipairs(activeTweens) do
+            pcall(function() tw:Cancel() end)
+        end
+        activeTweens = {}
+
+        local D = 0.38   -- 统一时长
+
+        -- 光圈：从当前透明度继续淡到 1（不突然变亮，保持脉冲的余韵）
+        pcall(function()
+            Anim.to(ringStroke, { Transparency = 1 }, D,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            Anim.to(ringScale, { Scale = 1.25 }, D,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        end)
+        -- 文字 + 箭头 + 背景
+        pcall(function()
+            Anim.to(tip, { TextTransparency = 1, BackgroundTransparency = 1 }, D,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            Anim.to(arrow, { TextTransparency = 1 }, D,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        end)
+
+        task.delay(D + 0.02, function()
+            if guideGui then pcall(function() guideGui:Destroy() end) end
+        end)
+    end
+
+    -- 文字弹跳：多弹几下才停
+    task.delay(TIP_START + 0.3, function()
+        local n = 0
+        while not finished and n < TIP_BOUNCES and guideGui.Parent do
+            task.wait(BOUNCE_STEP)
+            n = n + 1
+        end
+    end)
+
+    -- 提前取消
+    local endConn
+    endConn = UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.Keyboard then
+            if endConn then pcall(function() endConn:Disconnect() end) end
+            fadeOutAll()
+        end
+    end)
+
+    -- 正常结束
+    task.delay(2.15, function()
+        if endConn then pcall(function() endConn:Disconnect() end) end
+        fadeOutAll()
+    end)
+
+    local endConn
+    endConn = UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.Keyboard then
+            if endConn then pcall(function() endConn:Disconnect() end) end
+            finish()
+        end
+    end)
+
+    task.delay(2.3, function()
+        if endConn then pcall(function() endConn:Disconnect() end) end
+        finish()
+    end)
+end
+
 function Window:SetVisible(visible, instant)
     if self.Destroyed then return end
 
@@ -1089,10 +1629,61 @@ function Window:SetVisible(visible, instant)
             panel.Position = UDim2.new(0.5, 0, 0.5, 0)
             panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
             panel.BackgroundTransparency = BASE_TRANS
-            self.Scale.Scale = 1
+            if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
             for _, w in ipairs(contentParts()) do
-                w.Position = w:GetAttribute("__basePos") or w.Position
-                w.BackgroundTransparency = 0
+                local base = w:GetAttribute("__basePos")
+                if base then w.Position = base end
+                w.BackgroundTransparency = w:GetAttribute("__baseTrans") or 0
+            end
+            self.FirstShow = false
+            return
+        end
+
+        -- 第一次显示：完整入场（弹性放大 + 内容依次滑入）
+        -- 之后：快速浮现，不拖沓
+        local isFirst = self.FirstShow
+        self.FirstShow = false
+
+        if isFirst then
+            -- 首帧：完全收起到中心，透明
+            panel.Position = UDim2.new(0.5, 0, 0.5, 24)
+            panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+            panel.BackgroundTransparency = 0.4
+            if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.82 end
+
+            -- 内容先藏起来
+            local parts0 = contentParts()
+            for _, w in ipairs(parts0) do
+                if not w:GetAttribute("__basePos") then
+                    w:SetAttribute("__basePos", w.Position)
+                end
+                local base = w:GetAttribute("__basePos")
+                w.Position = UDim2.new(base.X.Scale, base.X.Offset,
+                                       base.Y.Scale, base.Y.Offset + 20)
+                w.BackgroundTransparency = 1
+            end
+
+            -- 面板：上浮 + 淡入 + 弹性放大
+            Anim.to(panel, {
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                BackgroundTransparency = BASE_TRANS,
+            }, 0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+            if self.Scale then
+                Anim.to(self.Scale, { Scale = 1 }, 0.50,
+                    Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end
+
+            -- 内容：分三波滑入，有节奏感
+            local parts = contentParts()
+            local delay = 0.14
+            for idx, w in ipairs(parts) do
+                local base = w:GetAttribute("__basePos")
+                Anim.to(w, {
+                    Position = base,
+                    BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
+                }, 0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
+                delay = delay + 0.08
             end
             return
         end
@@ -1101,12 +1692,12 @@ function Window:SetVisible(visible, instant)
         panel.Position = UDim2.new(0.5, 0, 0.5, 10)
         panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
         panel.BackgroundTransparency = BASE_TRANS
-        if self.Scale then self.Scale.Scale = 0.88 end
+        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.88 end
 
         -- 面板：弹性放大（Back 过冲）
         Anim.to(panel, { Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.34,
             Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-        if self.Scale then Anim.to(self.Scale, { Scale = 1 }, 0.42,
+        if self.Scale then Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.42,
             Enum.EasingStyle.Back, Enum.EasingDirection.Out) end
 
         -- 内容：上移 + 淡入，依次错开
@@ -1119,11 +1710,11 @@ function Window:SetVisible(visible, instant)
             local base = w:GetAttribute("__basePos")
             w.Position = UDim2.new(base.X.Scale, base.X.Offset,
                                    base.Y.Scale, base.Y.Offset + 14)
-            w.BackgroundTransparency = 1
+            w.BackgroundTransparency = math.min(1, (w:GetAttribute("__baseTrans") or 0) + 0.6)
 
             Anim.to(w, {
                 Position = base,
-                BackgroundTransparency = 0,
+                BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
             }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
             delay = delay + 0.06
         end
@@ -1147,7 +1738,7 @@ function Window:SetVisible(visible, instant)
         end
 
         if self.Scale then
-            Anim.to(self.Scale, { Scale = 0.94 }, 0.16,
+            Anim.to(self.Scale, { Scale = (self.BaseScale or 1) * 0.94 }, 0.16,
                 Enum.EasingStyle.Quad, Enum.EasingDirection.In)
         end
         Anim.to(panel, {
@@ -1157,9 +1748,18 @@ function Window:SetVisible(visible, instant)
         task.delay(0.17, function()
             if not self.Visible and self.Gui then
                 self.Gui.Enabled = false
+                if self.Panel then self.Panel.Visible = false end
+                -- 有顶栏按钮，且不是点按钮关闭 → 指引按钮位置
+                local byButton = self._closedByTopbar
+                self._closedByTopbar = nil
+                if not byButton and self.TopbarButton and not self.GuideShown then
+                    task.spawn(function()
+                        pcall(function() self:_ShowButtonGuide() end)
+                    end)
+                end
                 self.Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
                 self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-                if self.Scale then self.Scale.Scale = 1 end
+                if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
                 for _, w in ipairs(contentParts()) do
                     local base = w:GetAttribute("__basePos")
                     if base then w.Position = base end
