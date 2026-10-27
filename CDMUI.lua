@@ -2494,6 +2494,376 @@ function Tab:Body2D(cfg)
     return ctrl
 end
 
+-- ============================================================
+-- Section：分组标题（视觉分隔，带下划细线）
+-- ============================================================
+function Tab:Section(cfg)
+    local row = mk("Frame", {
+        Name = "SectionRow",
+        Size = UDim2.new(1, -12, 0, 34),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        ZIndex = 4,
+        Active = false,
+        LayoutOrder = (self.Items + 1) * 1000,
+        Visible = (self.Window.TabIndex == #self.Window.Tabs),
+    }, self.Container)
+    self.Items = self.Items + 1
+    table.insert(self.Widgets, row)
+
+    mk("TextLabel", {
+        Name = "SectionTitle",
+        Size = UDim2.new(1, -8, 0, 20),
+        Position = UDim2.new(0, 4, 0, 6),
+        BackgroundTransparency = 1,
+        Text = cfg.Name or cfg.name or "",
+        TextColor3 = T.textDim,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.rowDesc,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 5,
+        Active = false,
+    }, row)
+
+    local line = mk("Frame", {
+        Name = "Line",
+        Size = UDim2.new(1, -8, 0, 1),
+        Position = UDim2.new(0, 4, 0, 28),
+        BackgroundColor3 = T.panelStroke,
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        ZIndex = 5,
+    }, row)
+    return row
+end
+
+-- ============================================================
+-- ColorPicker：颜色选择（色相条 + 饱和度亮度方块 + 预览）
+-- ============================================================
+function Tab:ColorPicker(cfg)
+    local row = baseRow(self, ROW_H + 34)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local col = cfg.Default or Color3.fromRGB(255, 255, 255)
+    local h, s, v = Color3.toHSV(col)
+    self.Window.State[key] = col
+
+    local SWATCH = 34
+    local PREVIEW_W = 44
+    local HUE_H = 10
+
+    -- 预览色块
+    local preview = mk("Frame", {
+        Name = "Preview",
+        Size = UDim2.fromOffset(PREVIEW_W, SWATCH),
+        Position = UDim2.new(1, -(PREVIEW_W + 8), 0, 8),
+        BackgroundColor3 = col,
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    }, row)
+    corner(preview, 5)
+    stroke(preview, T.ctrlStroke, 1, 0.30)
+
+    -- 色相条
+    local hueBar = mk("Frame", {
+        Name = "HueBar",
+        Size = UDim2.new(1, -(PREVIEW_W + 8 + 8), 0, HUE_H),
+        Position = UDim2.new(0, 8, 1, -22),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    }, row)
+    corner(hueBar, HUE_H / 2)
+
+    local grad = mk("UIGradient", {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 0, 0)),
+            ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
+            ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
+            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(0, 255, 255)),
+            ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0, 0, 255)),
+            ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 255)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 0, 0)),
+        }),
+    }, hueBar)
+
+    local hueHit = mk("TextButton", {
+        Name = "HueHit",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 8,
+        Active = true,
+    }, hueBar)
+
+    local hueKnob = mk("Frame", {
+        Name = "HueKnob",
+        Size = UDim2.fromOffset(4, HUE_H + 6),
+        Position = UDim2.new(h, -2, 0.5, -(HUE_H + 6) / 2),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        ZIndex = 9,
+    }, hueBar)
+    corner(hueKnob, 2)
+
+    local function apply()
+        local c = Color3.fromHSV(h, s, v)
+        preview.BackgroundColor3 = c
+        hueKnob.Position = UDim2.new(h, -2, 0.5, -(HUE_H + 6) / 2)
+        self.Window.State[key] = c
+        if cfg.Callback then cfg.Callback(c) end
+    end
+
+    local dragging = false
+    local function setHue(x)
+        local ax = hueBar.AbsolutePosition.X
+        local aw = hueBar.AbsoluteSize.X
+        h = math.clamp((x - ax) / aw, 0, 1)
+        apply()
+    end
+
+    hueHit.MouseButton1Down:Connect(function()
+        dragging = true
+        local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+        if ok and loc then setHue(loc.X) end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if not dragging then return end
+        if i.UserInputType == Enum.UserInputType.MouseMovement
+            or i.UserInputType == Enum.UserInputType.Touch then setHue(i.Position.X) end
+    end)
+
+    local ctrl = {
+        Get = function() return Color3.fromHSV(h, s, v) end,
+        Set = function(c) h, s, v = Color3.toHSV(c); apply() end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+-- ============================================================
+-- Dropdown：下拉选择
+-- ============================================================
+function Tab:Dropdown(cfg)
+    local options = cfg.Options or {}
+    local key = cfg.Key or cfg.key
+    local selected = cfg.Default or options[1]
+    local rowH = ROW_H + (#options > 0 and 6 or 0)
+
+    local row = baseRow(self, rowH)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+    self.Window.State[key] = selected
+
+    local btn = mk("TextButton", {
+        Name = "DropdownBtn",
+        Size = UDim2.new(0, IS_MOBILE and 150 or 130, 0, 28),
+        Position = UDim2.new(1, -(IS_MOBILE and 158 or 138), 0.5, -14),
+        BackgroundColor3 = T.ctrl,
+        Text = tostring(selected),
+        TextColor3 = T.ctrlText,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.ctrlText,
+        AutoButtonColor = false,
+        ZIndex = 20,
+        Active = true,
+    }, row)
+    corner(btn, 5)
+    stroke(btn, T.ctrlStroke, 1, 0.4)
+
+    -- 下拉面板
+    local listH = math.min(#options, 6) * 26
+    local panel = mk("Frame", {
+        Name = "DropdownList",
+        Size = UDim2.new(0, IS_MOBILE and 150 or 130, 0, listH),
+        Position = UDim2.new(1, -(IS_MOBILE and 158 or 138), 1, 2),
+        BackgroundColor3 = T.row,
+        BorderSizePixel = 0,
+        Visible = false,
+        ZIndex = 50,
+    }, row)
+    corner(panel, 5)
+    stroke(panel, T.ctrlStroke, 1, 0.3)
+
+    mk("UIListLayout", {
+        Padding = UDim.new(0, 2),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, panel)
+    local pad = mk("UIPadding", {
+        PaddingTop = UDim.new(0, 3),
+        PaddingBottom = UDim.new(0, 3),
+        PaddingLeft = UDim.new(0, 3),
+        PaddingRight = UDim.new(0, 3),
+    }, panel)
+
+    local open = false
+    local function close()
+        open = false
+        panel.Visible = false
+    end
+
+    for i, opt in ipairs(options) do
+        local item = mk("TextButton", {
+            Name = "Opt",
+            Size = UDim2.new(1, 0, 0, 24),
+            BackgroundColor3 = (opt == selected) and T.ctrl or T.row,
+            Text = tostring(opt),
+            TextColor3 = (opt == selected) and T.accent or T.ctrlText,
+            Font = FONT,
+            TextSize = LAYOUT.rowDesc,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            AutoButtonColor = false,
+            LayoutOrder = i,
+            ZIndex = 51,
+            Active = true,
+        }, panel)
+        corner(item, 3)
+        local pd = mk("UIPadding", { PaddingLeft = UDim.new(0, 8) }, item)
+
+        bindTap(item, function()
+            selected = opt
+            btn.Text = tostring(opt)
+            self.Window.State[key] = selected
+            close()
+            if cfg.Callback then cfg.Callback(selected, i) end
+        end)
+    end
+
+    bindTap(btn, function()
+        open = not open
+        panel.Visible = open
+    end)
+
+    local ctrl = {
+        Get = function() return selected end,
+        Set = function(v)
+            selected = v
+            btn.Text = tostring(v)
+            self.Window.State[key] = v
+        end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+-- ============================================================
+-- TextBox：文本输入（非数字）
+-- ============================================================
+function Tab:TextBox(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local value = cfg.Default or ""
+    self.Window.State[key] = value
+
+    local holder = mk("Frame", {
+        Name = "TextHolder",
+        Size = UDim2.new(0, IS_MOBILE and 150 or 130, 0, 28),
+        Position = UDim2.new(1, -(IS_MOBILE and 158 or 138), 0.5, -14),
+        BackgroundColor3 = T.ctrl,
+        BackgroundTransparency = 0.15,
+        BorderSizePixel = 0,
+        ZIndex = 20,
+    }, row)
+    corner(holder, 5)
+    stroke(holder, T.ctrlStroke, 1, 0.4)
+
+    local box = mk("TextBox", {
+        Name = "Input",
+        Size = UDim2.new(1, -12, 1, 0),
+        Position = UDim2.new(0, 6, 0, 0),
+        BackgroundTransparency = 1,
+        Text = tostring(value),
+        PlaceholderText = cfg.Placeholder or "输入…",
+        PlaceholderColor3 = T.textDim,
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.ctrlText,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ClearTextOnFocus = false,
+        ZIndex = 21,
+    }, holder)
+
+    box.FocusLost:Connect(function()
+        value = box.Text
+        self.Window.State[key] = value
+        if cfg.Callback then cfg.Callback(value) end
+    end)
+
+    local ctrl = {
+        Get = function() return value end,
+        Set = function(v) value = v; box.Text = tostring(v) end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
+-- ============================================================
+-- Progress：进度条（只读展示）
+-- ============================================================
+function Tab:Progress(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key or "__progress"
+
+    local track = mk("Frame", {
+        Name = "Track",
+        Size = UDim2.new(0, IS_MOBILE and 150 or 130, 0, 6),
+        Position = UDim2.new(1, -(IS_MOBILE and 158 or 138), 0.5, -3),
+        BackgroundColor3 = T.ctrl,
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    }, row)
+    corner(track, 3)
+
+    local fill = mk("Frame", {
+        Name = "Fill",
+        Size = UDim2.new(math.clamp(cfg.Value or 0, 0, 1), 0, 1, 0),
+        BackgroundColor3 = cfg.Color or T.accent,
+        BorderSizePixel = 0,
+        ZIndex = 7,
+    }, track)
+    corner(fill, 3)
+
+    local pct = mk("TextLabel", {
+        Name = "Pct",
+        Size = UDim2.fromOffset(40, 18),
+        Position = UDim2.new(0, IS_MOBILE and 156 or 136, 0.5, -9),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.rowDesc,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        ZIndex = 6,
+    }, row)
+
+    local function render(v)
+        v = math.clamp(v, 0, 1)
+        fill.Size = UDim2.new(v, 0, 1, 0)
+        pct.Text = string.format("%d%%", math.floor(v * 100 + 0.5))
+    end
+    render(cfg.Value or 0)
+
+    local ctrl = {
+        Set = function(v) render(v) end,
+        Get = function() return fill.Size.X.Scale end,
+    }
+    self.Rows[key] = ctrl
+    return ctrl
+end
+
 function Tab:Divider()
     local row = mk("Frame", {
         Name = "Divider",
