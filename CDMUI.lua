@@ -2307,7 +2307,7 @@ function Tab:Body2D(cfg)
 
     local row = mk("Frame", {
         Name = "BodyRow",
-        Size = UDim2.new(1, -12, 0, 330),
+        Size = UDim2.new(1, -12, 0, 470),
         BackgroundColor3 = T.row,
         BackgroundTransparency = 0.15,
         BorderSizePixel = 0,
@@ -2371,11 +2371,11 @@ function Tab:Body2D(cfg)
     -- ============ 小人画布 ============
     -- R6 比例（单位 = 像素）：
     --   头 26x26 | 躯干 34x38 | 臂 14x38 | 腿 16x38
-    local HX, HY = 56, 56       -- 头
-    local TW, TH = 74, 82       -- 躯干
-    local AW, AH = 30, 82       -- 臂
-    local LW, LH = 34, 82       -- 腿
-    local GAP = 4
+    local HX, HY = 96, 96       -- 头
+    local TW, TH = 126, 140     -- 躯干
+    local AW, AH = 50, 140      -- 臂
+    local LW, LH = 58, 140      -- 腿
+    local GAP = 6
 
     local totalW = AW + GAP + TW + GAP + AW
     local totalH = HY + 2 + TH + 2 + LH
@@ -2383,7 +2383,7 @@ function Tab:Body2D(cfg)
     local canvas = mk("Frame", {
         Name = "Canvas",
         Size = UDim2.fromOffset(totalW, totalH),
-        Position = UDim2.new(0.5, -totalW / 2, 0, 54),
+        Position = UDim2.new(0.5, -totalW / 2, 0, 58),
         BackgroundTransparency = 1,
         ZIndex = 5,
     }, row)
@@ -2415,7 +2415,7 @@ function Tab:Body2D(cfg)
             Text = label or "",
             TextColor3 = Color3.fromRGB(150, 150, 162),
             Font = FONT_BOLD,
-            TextSize = 13,
+            TextSize = 15,
             TextXAlignment = Enum.TextXAlignment.Center,
             TextYAlignment = Enum.TextYAlignment.Center,
             ZIndex = 7,
