@@ -138,6 +138,45 @@ other:MultiSelect({
     Default = { "拾取" },
 })
 
+-- ── 展示页：新增控件示例 ─────────────────────────────────────────────
+local showcase = win:Tab("展示")
+
+showcase:Section({ Name = "基础展示" })
+
+showcase:Label({ Name = "演示文本", Desc = "这是一段演示说明" })
+
+showcase:Progress({
+    Key = "demo_progress",
+    Name = "演示进度",
+    Desc = "只读进度条",
+    Value = 0.65,
+})
+
+showcase:Section({ Name = "选择与输入" })
+
+showcase:Dropdown({
+    Key = "demo_dropdown",
+    Name = "演示下拉",
+    Desc = "点开选择一项",
+    Options = { "选项一", "选项二", "选项三", "选项四" },
+    Default = "选项一",
+})
+
+showcase:TextBox({
+    Key = "demo_text",
+    Name = "演示文本输入",
+    Desc = "输入后回车确认",
+    Default = "",
+    Placeholder = "请输入演示文本",
+})
+
+showcase:ColorPicker({
+    Key = "demo_color",
+    Name = "演示颜色",
+    Desc = "拖动色相条选择颜色",
+    Default = Color3.fromRGB(255, 255, 255),
+})
+
 other:Label({ Name = "占位符", Desc = "后续功能将陆续加入" })
 
 win:Notify("控制面板已加载")
