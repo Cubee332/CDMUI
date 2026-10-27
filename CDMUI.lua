@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.4.6
+    CDMUI 1.4.7
     Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
     ────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@
        只能用真实鼠标/手指操作。
     4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
 --]]
--- CDMUI v1.4.6  功能行入场提前到 Tab 滚动的 26% 处，两条动画基本并行
+-- CDMUI v1.4.7  鼠标状态记录与还原；入场动画期间屏蔽悬停高亮；hook 全局单例
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -169,7 +169,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.6"
+UI.Version = "1.4.7"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1543,6 +1543,15 @@ function UI.Create(opts)
             end
         end
 
+        -- 重载/卸载前先把鼠标还原，否则 hook 留下会卡住鼠标
+        for _, w in ipairs(old) do
+            pcall(function()
+                if type(w) == "table" and w._RestoreMouse then
+                    w:_RestoreMouse()
+                end
+            end)
+        end
+
         -- 播动画（用刚清空前的列表，所以直接传进去）
         _G._CDMUILiveWindows = old
         UI.PlayExitAnim(0.22)
@@ -1572,6 +1581,11 @@ function UI.Create(opts)
                     if btn and btn.Parent then btn:Destroy() end
                     local g = w._guideGui
                     if g and g.Parent then g:Destroy() end
+
+                    -- 释放鼠标 hook 引用；最后一个释放的会把 __newindex 完全还原
+                    pcall(function()
+                        if w._HardLockMouse then w:_HardLockMouse(false) end
+                    end)
                 end)
             end
         end)
@@ -1803,6 +1817,16 @@ function Window:_PlayIntro()
                         if totalW <= barW + 4 or n < 3 then
                             -- Tab 撑不满一屏：不滚动，改成从左往右依次淡入
                             self._tabAnimating = true
+                            -- 同样禁用交互，避免鼠标提前点亮
+                            local savedTabActive = {}
+                            for i, tb in ipairs(self.Tabs) do
+                                if tb.Button then
+                                    pcall(function()
+                                        savedTabActive[i] = tb.Button.Active
+                                        tb.Button.Active = false
+                                    end)
+                                end
+                            end
                             local orig = {}
                             for i, tb in ipairs(self.Tabs) do
                                 if tb.Button then
@@ -1841,6 +1865,14 @@ function Window:_PlayIntro()
                                 -- 动画期间画布保持「撑满」，避免滚动条在最后一帧跳动
                                 -- 先解锁，再延迟一帧恢复布局，滚动条变化就不会被看到
                                 self._tabAnimating = false
+                                -- 恢复 Tab 交互
+                                for i, tb in ipairs(self.Tabs) do
+                                    if tb.Button then
+                                        pcall(function()
+                                            tb.Button.Active = savedTabActive[i] ~= false
+                                        end)
+                                    end
+                                end
                                 task.defer(function()
                                     if self.Destroyed then return end
                                     pcall(function() self:LayoutTabs() end)
@@ -1871,6 +1903,18 @@ function Window:_PlayIntro()
                         -- 动画期间把滚动条藏起来，动画结束时再淡入
                         if bar then
                             pcall(function() bar.ScrollBarImageTransparency = 1 end)
+                        end
+
+                        -- 动画期间禁用 Tab 按钮的鼠标响应，
+                        -- 否则鼠标停在某个 Tab 上会提前点亮它
+                        local savedTabActive = {}
+                        for i, tb in ipairs(self.Tabs) do
+                            if tb.Button then
+                                pcall(function()
+                                    savedTabActive[i] = tb.Button.Active
+                                    tb.Button.Active = false
+                                end)
+                            end
                         end
 
                         -- 起点：最后一个 Tab 的左边缘刚好落在栏最左边
@@ -1940,6 +1984,34 @@ function Window:_PlayIntro()
                 end)
 
                 local maxRows = math.min(#rows, 14)
+
+                -- 入场期间把这行所有可交互元素都按住，
+                -- 否则鼠标停在上面会提前把背景点亮（行本身 Active 常是 false，
+                -- 真正接鼠标的是里面的按钮，所以要连后代一起处理）
+                local savedActive = {}
+                local function setRowActive(w, on)
+                    pcall(function()
+                        local list = savedActive[w]
+                        if not list then
+                            list = {}
+                            savedActive[w] = list
+                            local all = {w}
+                            for _, d in ipairs(w:GetDescendants()) do
+                                if d:IsA("GuiObject") then all[#all + 1] = d end
+                            end
+                            for k, o in ipairs(all) do
+                                list[k] = { obj = o, active = o.Active }
+                            end
+                        end
+                        for _, ent in ipairs(list) do
+                            pcall(function() ent.obj.Active = on and ent.active or false end)
+                        end
+                    end)
+                end
+                for i = 1, maxRows do
+                    setRowActive(rows[i], false)
+                end
+
                 for i = 1, maxRows do
                     local w = rows[i]
                     pcall(function()
@@ -1985,9 +2057,23 @@ function Window:_PlayIntro()
                                     }):Play()
                                 end)
                             end
+
+                            -- 这一行播完后恢复交互
+                            task.delay(0.40, function()
+                                if self.Destroyed then return end
+                                setRowActive(w, true)
+                            end)
                         end)
                     end)
                 end
+
+                -- 兜底：万一某行没播到，统一在整段动画后全部恢复
+                task.delay(0.30 + maxRows * 0.075 + 0.60, function()
+                    if self.Destroyed then return end
+                    for i = 1, maxRows do
+                        if rows[i] then setRowActive(rows[i], true) end
+                    end
+                end)
             end)
 
         end)
@@ -2349,42 +2435,81 @@ end
 
 -- 解锁鼠标（记录原状态；游戏每帧可能强制锁定，所以持续覆盖）
 -- 方案二：拦截写入。游戏想把 MouseBehavior 改回锁定，这里直接改成 Default
+-- 全局唯一的鼠标 hook 状态，频繁重载时不会叠加
+_G._CDMUIMouseHook = _G._CDMUIMouseHook or {
+    installed = false,
+    origNewIndex = nil,
+    target = nil,          -- 目标 MouseBehavior（nil = 不干预）
+    refCount = 0,          -- 有多少个窗口在用它
+}
+
 function Window:_HardLockMouse(on)
+    local H = _G._CDMUIMouseHook
     if on then
-        if self._mouseHooked then return end
+        H.refCount = H.refCount + 1
+        self._mouseHooked = true
+        H.target = self.Visible and Enum.MouseBehavior.Default or nil
+
+        if H.installed then return true end
+
         local ok = pcall(function()
             local mt = getrawmetatable(game)
             if not mt or mt.__newindex == nil then return end
             local old = mt.__newindex
+            H.origNewIndex = old
             setreadonly(mt, false)
             mt.__newindex = newcclosure(function(obj, key, value)
-                if self._mouseHooked and self.Visible
-                   and obj == UserInputService and key == "MouseBehavior" then
-                    return old(obj, key, Enum.MouseBehavior.Default)
+                -- 只拦 MouseBehavior，其它一律透传
+                if obj == UserInputService and key == "MouseBehavior" then
+                    local want = H.target
+                    if want ~= nil then
+                        return old(obj, key, want)
+                    end
                 end
                 return old(obj, key, value)
             end)
             setreadonly(mt, true)
-            self._origNewIndex = old
-            self._mouseHooked = true
+            H.installed = true
         end)
         return ok
     else
-        if not self._mouseHooked then return end
         self._mouseHooked = false
-        pcall(function()
-            if not self._origNewIndex then return end
-            local mt = getrawmetatable(game)
-            setreadonly(mt, false)
-            mt.__newindex = self._origNewIndex
-            setreadonly(mt, true)
-        end)
-        self._origNewIndex = nil
+        H.refCount = math.max(0, H.refCount - 1)
+        if H.refCount > 0 then return end
+
+        -- 最后一个使用者卸掉 hook，完全还原游戏原本的 __newindex
+        if H.installed and H.origNewIndex then
+            pcall(function()
+                local mt = getrawmetatable(game)
+                if not mt then return end
+                setreadonly(mt, false)
+                mt.__newindex = H.origNewIndex
+                setreadonly(mt, true)
+            end)
+        end
+        H.installed = false
+        H.origNewIndex = nil
+        H.target = nil
     end
 end
 
 function Window:_UnlockMouse()
     if not self.AutoUnlockMouse then return end
+
+    -- 只在「第一次」打开面板时记录原始状态；
+    -- 重复打开不覆盖，否则会把解锁态记成原始态
+    if self._savedMouseBehavior == nil and not self._mouseEverOpened then
+        pcall(function()
+            self._savedMouseBehavior = UserInputService.MouseBehavior
+            self._savedMouseIcon = UserInputService.MouseIconEnabled
+        end)
+    end
+    self._mouseEverOpened = true
+
+    -- 游戏每帧强推自己的 MouseBehavior，必须靠 hook 才能稳住
+    _G._CDMUIMouseHook.target = Enum.MouseBehavior.Default
+    if not self._mouseHooked then self:_HardLockMouse(true) end
+
     if self._mouseLoop then return end
     self._mouseLoop = true
 
@@ -2400,21 +2525,9 @@ function Window:_UnlockMouse()
 
                 task.wait(0.05)
 
+                -- hook 已经把目标固定住了，这里只需要保证状态对
                 if self.Visible then
-                    local isDefault = false
-                    pcall(function()
-                        isDefault = (UserInputService.MouseBehavior == Enum.MouseBehavior.Default)
-                    end)
-
-                    if self.Visible and not isDefault then
-                        fails = fails + 1
-                        if fails >= 4 and not self._mouseHooked then
-                            -- 方案一压不住，切方案二
-                            self:_HardLockMouse(true)
-                        end
-                    else
-                        fails = 0
-                    end
+                    self._mouseTarget = Enum.MouseBehavior.Default
                 end
             else
                 fails = 0
@@ -2427,9 +2540,45 @@ function Window:_UnlockMouse()
 end
 
 -- 恢复鼠标
+--   _HardLockMouse 会劫持全局 __newindex，卸掉之后游戏不会再主动把
+--   MouseBehavior 设回去，所以这里必须主动还原，否则关面板后鼠标会一直是解锁的
 function Window:_RestoreMouse()
-    if self._mouseHooked then self:_HardLockMouse(false) end
     self._mouseLoop = false
+
+    -- 恢复成「打开面板之前」的状态，而不是强制锁回
+    local want = self._savedMouseBehavior
+    if want == nil then
+        -- 没记录过就什么都不做，交给游戏自己管
+        if self._mouseHooked then
+            self._mouseTarget = nil
+        end
+        return
+    end
+    _G._CDMUIMouseHook.target = want
+
+    -- hook 只在「有人写入」时才生效，所以这里自己写一次把它顶上去，
+    -- 再连写几帧防止游戏下一帧又盖回来
+    task.spawn(function()
+        local H = _G._CDMUIMouseHook
+        for i = 1, 30 do
+            -- 中途又被打开 / 被销毁 / 被别人接管，立刻收手
+            if self.Destroyed or self.Visible then break end
+            if H.target ~= want then break end
+
+            pcall(function()
+                UserInputService.MouseBehavior = want
+            end)
+            local ok, cur = pcall(function() return UserInputService.MouseBehavior end)
+            if ok and cur == want and i >= 3 then break end
+            task.wait(0.03)
+        end
+        -- 图标也恢复
+        if self._savedMouseIcon ~= nil then
+            pcall(function()
+                UserInputService.MouseIconEnabled = self._savedMouseIcon
+            end)
+        end
+    end)
 end
 
 function Window:SetVisible(visible, instant)
