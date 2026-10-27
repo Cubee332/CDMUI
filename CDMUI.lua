@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.9
+    CDMUI 1.3.10
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,7 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
--- CDMUI v1.3.9  切换 Tab 时滚动与收起展开重叠进行；重复点当前 Tab 平滑滚回顶部
+-- CDMUI v1.3.10  Cycle 回调改传索引（修所有下拉选项失效）；按钮加宽自适应；面板加宽字号调大
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -33,7 +33,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.9"
+UI.Version = "1.3.10"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -126,15 +126,15 @@ local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
 
 -- 移动端：面板更宽更矮、行更高（手指点得准）、Tab 平分整行、字号加大
 local LAYOUT = {
-    panelW      = IS_MOBILE and 520 or 460,
-    panelH      = IS_MOBILE and 600 or 580,
-    rowH        = IS_MOBILE and 72 or 58,
-    titleSize   = IS_MOBILE and 34 or 30,
-    tabHeight   = IS_MOBILE and 52 or 44,
+    panelW      = IS_MOBILE and 540 or 540,
+    panelH      = IS_MOBILE and 620 or 600,
+    rowH        = IS_MOBILE and 82 or 68,
+    titleSize   = IS_MOBILE and 36 or 32,
+    tabHeight   = IS_MOBILE and 56 or 48,
     tabWidth    = IS_MOBILE and 0 or 88,      -- 0 = 平分整行
-    tabTextSize = IS_MOBILE and 16 or 14,
-    rowTitle    = IS_MOBILE and 16 or 14,
-    rowDesc     = IS_MOBILE and 13 or 12,
+    tabTextSize = IS_MOBILE and 18 or 16,
+    rowTitle    = IS_MOBILE and 19 or 17,
+    rowDesc     = IS_MOBILE and 16 or 14,
     boxSize     = IS_MOBILE and 32 or 28,
     inputW      = IS_MOBILE and 84 or 70,
     inputH      = IS_MOBILE and 36 or 30,
@@ -158,7 +158,7 @@ local LAYOUT = {
     chipH       = IS_MOBILE and 30 or 24,     -- 多选 chip 高
     ctrlText    = IS_MOBILE and 14 or 12,     -- 控件字号
     arrowSize   = IS_MOBILE and 38 or 34,     -- 展开箭头
-    rowDescY    = IS_MOBILE and 34 or 30,     -- 行描述文字 Y 偏移
+    rowDescY    = IS_MOBILE and 38 or 34,     -- 行描述文字 Y 偏移
     tabY        = IS_MOBILE and 84 or 74,     -- Tab 栏 Y 位置
     tabItemW    = IS_MOBILE and 100 or 88,    -- 单个 Tab 宽
     cycleArrowW = IS_MOBILE and 30 or 24,     -- 循环按钮两侧箭头宽
@@ -2056,7 +2056,7 @@ function Window:LayoutTabs()
     local n = #self.Tabs
     if n == 0 then return end
 
-    local GAP = 6
+    local GAP = 7
     -- AbsoluteSize 是缩放后的像素；尺寸设置走未缩放坐标系，所以要除掉 UIScale
     local sc = (self.Scale and self.Scale.Scale) or 1
     if sc <= 0 then sc = 1 end
@@ -2070,8 +2070,8 @@ function Window:LayoutTabs()
 
     -- Tab 数量多时自动缩小字号，避免文字溢出
     local fontSize = LAYOUT.tabTextSize
-    if each < 90 then fontSize = math.max(10, LAYOUT.tabTextSize - 2) end
-    if each < 70 then fontSize = math.max(9, LAYOUT.tabTextSize - 4) end
+    if each < 82 then fontSize = math.max(11, LAYOUT.tabTextSize - 1) end
+    if each < 60 then fontSize = math.max(10, LAYOUT.tabTextSize - 3) end
 
     -- 手动定位（不再依赖 UIListLayout，避免它按内容宽度反算导致溢出）
     for i, t in ipairs(self.Tabs) do
@@ -2407,7 +2407,7 @@ end
 local function addTitle(row, data, offset)
     mk("TextLabel", {
         Name = "Title",
-        Size = UDim2.new(1, -80, 0, 22),
+        Size = UDim2.new(1, -80, 0, 24),
         Position = UDim2.new(0, 12, 0, offset or 8),
         BackgroundTransparency = 1,
         Text = data.Name or data.name or data.Title or data.title or "",
@@ -2425,7 +2425,7 @@ local function addDesc(row, data, y)
     if not desc then return end
     mk("TextLabel", {
         Name = "Desc",
-        Size = UDim2.new(1, -80, 0, 18),
+        Size = UDim2.new(1, -80, 0, 20),
         Position = UDim2.new(0, 12, 0, y or 30),
         BackgroundTransparency = 1,
         Text = desc,
@@ -2667,19 +2667,28 @@ function Tab:Expand(cfg)
         local cy = cfg.Cycle
         local opts = cy.Options or {}
         local idx = cy.DefaultIndex or 1
-        local CW = IS_MOBILE and 96 or 82
-        -- 箭头放在循环按钮左侧，间距与其他行一致（GAP=12）
+        -- 宽度按最长选项估算，避免文字被挤小
+        local widest = 0
+        for _, o in ipairs(opts) do
+            local len = utf8.len(tostring(o)) or #tostring(o)
+            local w = len * (IS_MOBILE and 17 or 15) + 24
+            if w > widest then widest = w end
+        end
+        local CW = math.clamp(widest, IS_MOBILE and 130 or 110, IS_MOBILE and 200 or 170)
+        local CH = IS_MOBILE and 34 or 30
+
+        -- 箭头放在循环按钮左侧，间距与其他行一致
         arrowOffset = CW + GAP + 10
 
         local cycBtn = mk("TextButton", {
             Name = "CycleBtn",
-            Size = UDim2.fromOffset(CW, IS_MOBILE and 30 or 26),
-            Position = UDim2.new(1, -(CW + 10), 0.5, -(IS_MOBILE and 15 or 13)),
+            Size = UDim2.fromOffset(CW, CH),
+            Position = UDim2.new(1, -(CW + 10), 0.5, -CH / 2),
             BackgroundColor3 = T.cycleBg,
             Text = tostring(opts[idx] or ""),
             TextColor3 = T.ctrlText,
             Font = FONT_BOLD,
-            TextSize = math.max(10, LAYOUT.ctrlText - 1),
+            TextSize = LAYOUT.ctrlText + 1,
             AutoButtonColor = false,
             ZIndex = 20,
             Active = true,
@@ -2691,7 +2700,8 @@ function Tab:Expand(cfg)
             idx = ((newIdx - 1) % #opts) + 1
             cycBtn.Text = tostring(opts[idx] or "")
             self.Window.State[key] = idx
-            if cy.Callback then pcall(cy.Callback, opts[idx], idx) end
+            -- 同样把索引放第一位
+            if cy.Callback then pcall(cy.Callback, idx, opts[idx]) end
         end
 
         bindTap(cycBtn, function()
@@ -3102,8 +3112,10 @@ function Tab:Cycle(cfg)
     self.Window.State[key] = options[idx]
 
     local ctrl = makeCycle(row, options, idx, function(opt, i)
-        self.Window.State[key] = opt
-        if cfg.Callback then cfg.Callback(opt, i) end
+        self.Window.State[key] = i
+        -- 第一个参数给索引，第二个给文字。
+        -- 上游模块的 setter 基本都按索引判断，给文字会全部失效。
+        if cfg.Callback then cfg.Callback(i, opt) end
     end)
     self.Rows[key] = ctrl
     return ctrl
@@ -3644,7 +3656,7 @@ function Tab:Section(cfg)
         Text = cfg.Name or cfg.name or "",
         TextColor3 = T.textDim,
         Font = FONT_BOLD,
-        TextSize = LAYOUT.rowDesc,
+        TextSize = LAYOUT.rowTitle,
         TextXAlignment = Enum.TextXAlignment.Left,
         ZIndex = 5,
         Active = false,
@@ -3653,7 +3665,7 @@ function Tab:Section(cfg)
     local line = mk("Frame", {
         Name = "Line",
         Size = UDim2.new(1, -8, 0, 1),
-        Position = UDim2.new(0, 4, 0, 28),
+        Position = UDim2.new(0, 4, 0, 31),
         BackgroundColor3 = T.panelStroke,
         BackgroundTransparency = 0.5,
         BorderSizePixel = 0,
