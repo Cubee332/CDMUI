@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.4.4
+    CDMUI 1.4.5
     Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
     ────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@
        只能用真实鼠标/手指操作。
     4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
 --]]
--- CDMUI v1.4.4  入场动画：Tab 滚动/淡入 + 功能行逐行展开；引导也随退出动画淡出
+-- CDMUI v1.4.5  功能行改为从左往右依次插入并与 Tab 滚动重叠；滚动条抽搐修复
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -169,7 +169,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.4"
+UI.Version = "1.4.5"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1823,12 +1823,12 @@ function Window:_PlayIntro()
                             for i, tb in ipairs(self.Tabs) do
                                 if tb.Button and orig[i] then
                                     pcall(function()
-                                        local d = 0.10 + (i - 1) * 0.07
+                                        local d = 0.15 + (i - 1) * 0.10
                                         -- 滑回原位 + 淡入
-                                        TweenService:Create(tb.Button, TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out, d), {
+                                        TweenService:Create(tb.Button, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, d), {
                                             Position = orig[i].pos,
                                         }):Play()
-                                        TweenService:Create(tb.Button, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, d), {
+                                        TweenService:Create(tb.Button, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, d), {
                                             BackgroundTransparency = orig[i].bg,
                                             TextTransparency = orig[i].tx,
                                         }):Play()
@@ -1836,10 +1836,24 @@ function Window:_PlayIntro()
                                 end
                             end
                             -- 最后一个播完再放开布局
-                            task.delay(0.10 + n * 0.07 + 0.36, function()
+                            task.delay(0.15 + n * 0.10 + 0.60, function()
                                 if self.Destroyed then return end
+                                -- 动画期间画布保持「撑满」，避免滚动条在最后一帧跳动
+                                -- 先解锁，再延迟一帧恢复布局，滚动条变化就不会被看到
                                 self._tabAnimating = false
-                                pcall(function() self:LayoutTabs() end)
+                                task.defer(function()
+                                    if self.Destroyed then return end
+                                    pcall(function() self:LayoutTabs() end)
+                                    -- 布局稳定后再把滚动条淡回来
+                                    if bar then
+                                        pcall(function()
+                                            bar.ScrollBarImageTransparency = 1
+                                            TweenService:Create(bar, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                                                ScrollBarImageTransparency = 0.35,
+                                            }):Play()
+                                        end)
+                                    end
+                                end)
                             end)
                             return
                         end
@@ -1854,18 +1868,25 @@ function Window:_PlayIntro()
 
                         -- 标记动画中，阻止 LayoutTabs 抢位置
                         self._tabAnimating = true
+                        -- 动画期间把滚动条藏起来，动画结束时再淡入
+                        if bar then
+                            pcall(function() bar.ScrollBarImageTransparency = 1 end)
+                        end
 
-                        -- 起点：整体左移，让最后一个「其他」露在最左
+                        -- 起点：最后一个 Tab 的左边缘刚好落在栏最左边
+                        local lastBase = bases[n]
+                        local startOffset = lastBase and (-lastBase.X.Offset) or (-n * 130)
+
                         for i, tb in ipairs(self.Tabs) do
                             if tb.Button and bases[i] then
                                 tb.Button.Position = UDim2.new(
-                                    bases[i].X.Scale, bases[i].X.Offset - n * 140,
+                                    bases[i].X.Scale, bases[i].X.Offset + startOffset,
                                     bases[i].Y.Scale, bases[i].Y.Offset)
                             end
                         end
 
                         local t0 = os.clock()
-                        local dur = 0.8
+                        local dur = 1.15
                         local conn
                         conn = RunService.Heartbeat:Connect(function()
                             if self.Destroyed then
@@ -1873,9 +1894,9 @@ function Window:_PlayIntro()
                                 return
                             end
                             local a = math.clamp((os.clock() - t0) / dur, 0, 1)
-                            -- ease-out quint
-                            local e = 1 - (1 - a) ^ 5
-                            local offset = -n * 140 * (1 - e)
+                            -- 起步就带速度（ease-out cubic），避免迟滞感
+                            local e = 1 - (1 - a) ^ 3
+                            local offset = startOffset * (1 - e)
                             for i, tb in ipairs(self.Tabs) do
                                 if tb.Button and bases[i] then
                                     pcall(function()
@@ -1901,104 +1922,74 @@ function Window:_PlayIntro()
                 end
             end
 
-            -- 功能内容逐行从上往下展开
+            -- 功能内容：从左往右滑入，一个接一个（互相重叠）
             pcall(function()
+                local curTab = self.Tabs[self.TabIndex or 1]
+                local src = (curTab and curTab.Widgets) or {}
                 local rows = {}
-                for _, w in ipairs(self.Widgets or {}) do
+                for _, w in ipairs(src) do
                     if w and w.Parent and w.Visible then
                         rows[#rows + 1] = w
                     end
                 end
-                -- 按实际纵向位置排序，确保是从上往下
+                -- 按 LayoutOrder 排序（布局顺序稳定，不会随机）
                 table.sort(rows, function(a, b)
+                    local la, lb = a.LayoutOrder or 0, b.LayoutOrder or 0
+                    if la ~= lb then return la < lb end
                     return a.Position.Y.Offset < b.Position.Y.Offset
                 end)
 
-                -- 最多处理 14 行，多了拖动太长
                 local maxRows = math.min(#rows, 14)
                 for i = 1, maxRows do
                     local w = rows[i]
                     pcall(function()
-                        local baseT = w:GetAttribute("__baseTrans")
-                        if baseT == nil then
-                            baseT = w.BackgroundTransparency
-                            w:SetAttribute("__baseTrans", baseT)
-                        end
-                        local startT = math.min(1, baseT + 0.7)
-                        local function fadeRow(alpha)
-                            pcall(function()
-                                w.BackgroundTransparency = startT
-                                for _, d in ipairs(w:GetDescendants()) do
-                                    if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
-                                        if d:GetAttribute("__bt") == nil then
-                                            d:SetAttribute("__bt", d.TextTransparency)
-                                        end
-                                        d.TextTransparency = math.min(1, (d:GetAttribute("__bt") or 0) + alpha)
-                                    elseif d:IsA("Frame") then
-                                        if d:GetAttribute("__bgt") == nil then
-                                            d:SetAttribute("__bgt", d.BackgroundTransparency)
-                                        end
-                                        d.BackgroundTransparency = math.min(1, (d:GetAttribute("__bgt") or 0) + alpha)
-                                    elseif d:IsA("UIStroke") then
-                                        if d:GetAttribute("__st") == nil then
-                                            d:SetAttribute("__st", d.Transparency)
-                                        end
-                                        d.Transparency = math.min(1, (d:GetAttribute("__st") or 0) + alpha)
-                                    end
-                                end
-                            end)
-                        end
-                        local function restoreRow()
-                            pcall(function()
-                                w.BackgroundTransparency = baseT
-                                for _, d in ipairs(w:GetDescendants()) do
-                                    if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
-                                        local v = d:GetAttribute("__bt")
-                                        if v then d.TextTransparency = v end
-                                    elseif d:IsA("Frame") then
-                                        local v = d:GetAttribute("__bgt")
-                                        if v then d.BackgroundTransparency = v end
-                                    elseif d:IsA("UIStroke") then
-                                        local v = d:GetAttribute("__st")
-                                        if v then d.Transparency = v end
-                                    end
-                                end
-                            end)
+                        -- 记录原始状态
+                        local basePos = w.Position
+                        local baseT = w.BackgroundTransparency
+                        local parts = {}
+                        for _, d in ipairs(w:GetDescendants()) do
+                            if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                                parts[#parts + 1] = { obj = d, prop = "TextTransparency", base = d.TextTransparency }
+                            elseif d:IsA("Frame") then
+                                parts[#parts + 1] = { obj = d, prop = "BackgroundTransparency", base = d.BackgroundTransparency }
+                            elseif d:IsA("UIStroke") then
+                                parts[#parts + 1] = { obj = d, prop = "Transparency", base = d.Transparency }
+                            end
                         end
 
-                        -- 初始全透明
-                        fadeRow(1)
-                        task.delay(delay + 0.30 + i * 0.045, function()
+                        -- 起点：往左偏 40px + 全透明
+                        w.Position = UDim2.new(basePos.X.Scale, basePos.X.Offset - 40,
+                                               basePos.Y.Scale, basePos.Y.Offset)
+                        w.BackgroundTransparency = 1
+                        for _, p2 in ipairs(parts) do
+                            pcall(function() p2.obj[p2.prop] = 1 end)
+                        end
+
+                        -- 等 Tab 动画播完，然后每行间隔 0.08 秒依次滑入
+                        -- 单行动画 0.42 秒，间隔 0.08 -> 前一行刚播 20% 后一行就起步
+                        -- Tab 滚动 1.15 秒，行动画从 0.55 秒（约一半）就开始，
+                        -- 两者后半段重叠，衔接更自然
+                        local startAt = 0.55 + (i - 1) * 0.075
+                        task.delay(startAt, function()
                             if self.Destroyed or UI.IsStale() then return end
-                            restoreRow()
-                            for _, d in ipairs(w:GetDescendants()) do
-                                if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
-                                    local v = d:GetAttribute("__bt") or 0
-                                    d.TextTransparency = math.min(1, v + 0.9)
-                                    TweenService:Create(d, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-                                        TextTransparency = v,
-                                    }):Play()
-                                elseif d:IsA("Frame") then
-                                    local v = d:GetAttribute("__bgt") or 0
-                                    d.BackgroundTransparency = math.min(1, v + 0.9)
-                                    TweenService:Create(d, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-                                        BackgroundTransparency = v,
-                                    }):Play()
-                                elseif d:IsA("UIStroke") then
-                                    local v = d:GetAttribute("__st") or 0
-                                    d.Transparency = math.min(1, v + 0.9)
-                                    TweenService:Create(d, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-                                        Transparency = v,
-                                    }):Play()
-                                end
-                            end
-                            TweenService:Create(w, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                            -- 滑回原位
+                            TweenService:Create(w, TweenInfo.new(0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                                Position = basePos,
                                 BackgroundTransparency = baseT,
                             }):Play()
+                            -- 内容一起淡入
+                            for _, p2 in ipairs(parts) do
+                                pcall(function()
+                                    TweenService:Create(p2.obj, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                                        [p2.prop] = p2.base,
+                                    }):Play()
+                                end)
+                            end
                         end)
                     end)
                 end
             end)
+
         end)
     end)
 end
@@ -2771,7 +2762,12 @@ function Window:LayoutTabs()
             -- 直接按 contentRight 走，滚到底正好贴边
             self.TabBar.CanvasSize = UDim2.new(0, contentRight, 0, 0)
             self.TabBar.ScrollingEnabled = true
-            self.TabBar.ScrollBarThickness = IS_MOBILE and 5 or 3
+            -- 入场动画期间别改滚动条，避免最后一下抽搐
+            if not self._tabAnimating then
+                self.TabBar.ScrollBarThickness = IS_MOBILE and 5 or 3
+            else
+                self.TabBar.ScrollBarImageTransparency = 1
+            end
         else
             self.TabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
             self.TabBar.ScrollingEnabled = false
