@@ -27,6 +27,19 @@ local LocalPlayer = Players.LocalPlayer
 local UI = {}
 UI.Version = "1.2.0"
 
+-- ============================================================
+-- 重新运行时的自清理
+-- ============================================================
+-- 每次加载时，如果上次的实例还在，先把它完整销毁（断开连接、移除 UI），
+-- 避免重复运行导致面板叠加、功能重复触发。
+if type(_G._CDMUILastCleanup) == "function" then
+    pcall(_G._CDMUILastCleanup)
+end
+_G._CDMUILastCleanup = nil
+
+-- 实例登记表：Window:Destroy 时会把清理函数塞进来
+_G._CDMUILiveWindows = {}
+
 -- 主题色
 local T = {
     -- 面板
@@ -1074,6 +1087,18 @@ function UI.Create(opts)
     -- 触屏适配（仅移动端生效）
     pcall(UI.ApplyTouchTweaks, gui)
 
+    -- 登记到全局：下次加载库时会自动销毁这个窗口
+    if type(_G._CDMUILiveWindows) ~= "table" then _G._CDMUILiveWindows = {} end
+    table.insert(_G._CDMUILiveWindows, self)
+    _G._CDMUILastCleanup = function()
+        for _, w in ipairs(_G._CDMUILiveWindows or {}) do
+            if type(w) == "table" and w.Destroyed ~= true and w.Destroy then
+                pcall(function() w:Destroy() end)
+            end
+        end
+        _G._CDMUILiveWindows = {}
+    end
+
     -- 默认直接显示（原版是点顶栏按钮才弹，这里给个 AutoOpen 选项）
     if opts.AutoOpen ~= false then
         self.Visible = true
@@ -2111,12 +2136,39 @@ function Window:Set(key, value)
 end
 
 function Window:Destroy()
+    -- 从全局登记表移除
+    if type(_G._CDMUILiveWindows) == "table" then
+        for i = #_G._CDMUILiveWindows, 1, -1 do
+            if _G._CDMUILiveWindows[i] == self then
+                table.remove(_G._CDMUILiveWindows, i)
+            end
+        end
+    end
     self.Destroyed = true
-    for _, c in ipairs(self.Connections) do
+
+    -- 断开所有登记的连接
+    for _, c in ipairs(self.Connections or {}) do
         pcall(function() c:Disconnect() end)
     end
     self.Connections = {}
-    if self.Gui then self.Gui:Destroy() end
+
+    -- 销毁顶栏按钮（它挂在 TopbarStandard 下，不在 self.Gui 子树里）
+    if self.TopbarButton then
+        pcall(function() self.TopbarButton:Destroy() end)
+        self.TopbarButton = nil
+    end
+
+    -- 销毁按钮指引（独立 ScreenGui）
+    if self._guideGui then
+        pcall(function() self._guideGui:Destroy() end)
+        self._guideGui = nil
+    end
+
+    -- 销毁主面板
+    if self.Gui then
+        pcall(function() self.Gui:Destroy() end)
+        self.Gui = nil
+    end
 end
 
 -- 行构造
@@ -2200,11 +2252,92 @@ function Tab:Toggle(cfg)
     return ctrl
 end
 
+-- 行内按钮：标题/描述在左，按钮在右（类似 Toggle 的布局）
+function Tab:RowButton(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local BW = cfg.Width or 76
+    local BH = IS_MOBILE and 34 or 28
+
+    local btn = mk("TextButton", {
+        Name = "RowBtn",
+        Size = UDim2.fromOffset(BW, BH),
+        Position = UDim2.new(1, -(BW + 10), 0.5, -BH / 2),
+        BackgroundColor3 = (cfg.Variant == "primary") and T.accent or T.ctrl,
+        Text = cfg.Text or cfg.Name or "按钮",
+        TextColor3 = (cfg.Variant == "primary") and T.tabTextOn or T.ctrlText,
+        Font = FONT_BOLD,
+        TextSize = LAYOUT.ctrlText,
+        AutoButtonColor = false,
+        ZIndex = 20,
+        Active = true,
+    }, row)
+    corner(btn, 5)
+    if cfg.Variant ~= "primary" then
+        stroke(btn, T.ctrlStroke, 1, 0.4)
+    end
+
+    -- 悬停 / 按下反馈
+    local baseColor = btn.BackgroundColor3
+    btn.MouseEnter:Connect(function()
+        Anim.to(btn, { BackgroundColor3 = (cfg.Variant == "primary") and T.accent or T.ctrlHover }, 0.12)
+    end)
+    btn.MouseLeave:Connect(function()
+        Anim.to(btn, { BackgroundColor3 = baseColor }, 0.12)
+    end)
+
+    local originalText = btn.Text
+    local busy = false
+    bindTap(btn, function()
+        if busy then return end
+        playClick()
+        if cfg.Callback then cfg.Callback(btn) end
+    end)
+
+    local ctrl = {
+        Frame = row,
+        Button = btn,
+        Set = function(newText)
+            if newText then btn.Text = tostring(newText) end
+        end,
+        SetBusy = function(on)
+            busy = on and true or false
+            btn.Text = busy and "检测中…" or originalText
+            btn.Active = not busy
+        end,
+        Get = function() return btn.Text end,
+    }
+    if cfg.Key or cfg.key then
+        self.Rows[cfg.Key or cfg.key] = ctrl
+    end
+    return ctrl
+end
+
 function Tab:Label(cfg)
     local row = baseRow(self, ROW_H)
     addTitle(row, cfg, 8)
     addDesc(row, cfg, 30)
-    return row
+
+    -- 返回带 Set 方法的控件，方便动态更新文字
+    local title = row:FindFirstChild("Title")
+    local desc = row:FindFirstChild("Desc")
+    local ctrl = {
+        Frame = row,
+        Set = function(newTitle, newDesc, color)
+            if title and newTitle then title.Text = tostring(newTitle) end
+            if desc and newDesc then desc.Text = tostring(newDesc) end
+            if desc and color then desc.TextColor3 = color end
+        end,
+        Get = function()
+            return title and title.Text or "", desc and desc.Text or ""
+        end,
+    }
+    if cfg.Key or cfg.key then
+        self.Rows[cfg.Key or cfg.key] = ctrl
+    end
+    return ctrl
 end
 
 -- 展开项：子项作为 List 的兄弟行插入，靠 UIListLayout 自然排版，不会有裁剪/重叠问题
