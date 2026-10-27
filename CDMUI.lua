@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.2.0
+    CDMUI 1.3.0
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -12,6 +12,10 @@
         tab:Slider({ Key = "k2", Title = "滑条", Min = 0, Max = 100 })
 
     配置表在 UI.Theme / UI.Layout / UI.Size，创建窗口前可以改。
+
+    更新记录：
+      1.3.0  重新加载自动销毁旧实例；Expand 支持 Cycle 模式；新增 ClickableRow；指引停留延长到 5 秒
+      1.2.0  新增 Section / ColorPicker / Dropdown / TextBox / Progress 控件
 --]]
 
 local GuiService = game:GetService("GuiService")
@@ -25,7 +29,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.2.0"
+UI.Version = "1.3.0"
 
 -- ============================================================
 -- 重新运行时的自清理
