@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.3
+    CDMUI 1.3.4
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,7 +20,8 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
--- CDMUI v1.3.3  顶栏按钮延后到加载动画结束创建；指引时长延长到 8 秒
+-- CDMUI v1.3.4  修复指引时长被旧的 2 秒计时覆盖；顶栏按钮加出现动画
+-- CDMUI v1.3.3  顶栏按钮延后到加载动画结束创建；指引时长延长
 -- CDMUI v1.3.2  面板打开自动解锁鼠标（双方案兜底）；面板位置上移
 -- CDMUI v1.3.1  开关面板自动解锁/恢复鼠标；修复面板尺寸缩小与垂直居中
 -- CDMUI v1.3.0  重新加载自动销毁旧实例；Expand 支持 Cycle 模式；新增 ClickableRow；指引停留延长到 5 秒
@@ -37,7 +38,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.3"
+UI.Version = "1.3.4"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -867,6 +868,33 @@ local function createTopbarButton(self, labelText)
         if self.TopbarSetActive then self.TopbarSetActive(self.Visible) end
     end)
 
+    -- 出现动画：从稍小 + 透明，弹到位
+    widget.Visible = true
+    local appearScale = Instance.new("UIScale")
+    appearScale.Scale = 0.3
+    appearScale.Parent = widget
+
+    local parts = { bg }
+    for _, c in ipairs(widget:GetChildren()) do
+        if c:IsA("GuiObject") and c ~= bg and c:IsA("Frame") then
+            table.insert(parts, c)
+        end
+    end
+    for _, c in ipairs(parts) do
+        c.BackgroundTransparency = 1
+    end
+
+    task.spawn(function()
+        Anim.to(appearScale, { Scale = 1 }, 0.42, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        task.wait(0.06)
+        for _, c in ipairs(parts) do
+            -- 回到各自原本的透明度
+            local target = (c == bg) and GAME_BTN_TRANS or 1
+            Anim.to(c, { BackgroundTransparency = target }, 0.3,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        end
+    end)
+
     self.TopbarButton = widget
     return widget
 end
@@ -1575,7 +1603,7 @@ function Window:_ShowButtonGuide()
     task.spawn(function()
         local wait0 = 0.05
         local idx = 0
-        while not finished and guideGui.Parent and idx < 6 do
+        while not finished and guideGui.Parent and idx < 8 do
             idx = idx + 1
             doPulse(wait0)
             task.wait(0.63)
@@ -1650,28 +1678,12 @@ function Window:_ShowButtonGuide()
         end
     end)
 
-    -- 正常结束
-    task.delay(2.15, function()
+    -- 正常结束：停留 5 秒
+    task.delay(5.0, function()
         if endConn then pcall(function() endConn:Disconnect() end) end
         fadeOutAll()
     end)
 
-    local endConn
-    endConn = UserInputService.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch
-            or input.UserInputType == Enum.UserInputType.Keyboard then
-            if endConn then pcall(function() endConn:Disconnect() end) end
-            finish()
-        end
-    end)
-
-    -- 指引停留 8 秒，够看清也够跟手
-    task.delay(8.0, function()
-        if endConn then pcall(function() endConn:Disconnect() end) end
-        finish()
-    end)
 end
 
 -- 解锁鼠标（记录原状态；游戏每帧可能强制锁定，所以持续覆盖）
