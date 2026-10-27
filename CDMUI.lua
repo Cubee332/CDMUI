@@ -1,26 +1,162 @@
 --[[
-    CDMUI 1.3.10
+    CDMUI 1.4.2
+    Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
-    Roblox 控制面板 UI 库，单文件，无外部依赖。
+    ────────────────────────────────────────────────────────────
+    快速开始
+    ────────────────────────────────────────────────────────────
+        local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
+        local win = UI.Create({ Title = "我的面板" })
 
-    用法：
-        local UI = loadstring(game:HttpGet(".../CDMUI.lua"))()
-        local win = UI.Create({ Title = "面板" })
         local tab = win:Tab("基础")
+        tab:Toggle({ Key = "k1", Name = "开关", Desc = "点我试试", Default = false,
+            Callback = function(v) print("开关 =", v) end })
+        tab:Input({ Key = "k2", Name = "数值", Desc = "输入框", Default = "100",
+            Callback = function(v) print("数值 =", v) end })
 
-        tab:Toggle({ Key = "k1", Title = "开关", Default = false })
-        tab:Slider({ Key = "k2", Title = "滑条", Min = 0, Max = 100 })
-
-    配置表在 UI.Theme / UI.Layout / UI.Size，创建窗口前可以改。
-
-    创建窗口的常用选项：
-        Title            标题
+    ────────────────────────────────────────────────────────────
+    创建窗口 win = UI.Create{...}
+    ────────────────────────────────────────────────────────────
+        Title            面板标题，默认 "控制面板"
+        TopbarText       顶栏按钮文字
         AutoOpen         创建后是否自动显示，默认 true
         AutoUnlockMouse  面板打开时是否解锁鼠标，默认 true
         TopbarButton     是否生成左上角顶栏按钮，默认 true
+        ToggleKey        开关面板的快捷键（Enum.KeyCode）
 
+    窗口方法：
+        win:Tab(name)              新建 Tab，返回 Tab 对象
+        win:SelectTab(i, instant)  切到第 i 个 Tab
+        win:SetVisible(bool)       显示/隐藏面板
+        win:Destroy()              销毁面板
+        win:Get(key)               读取控件当前值
+
+    ────────────────────────────────────────────────────────────
+    控件一览
+    ────────────────────────────────────────────────────────────
+    所有控件的回调都在 Callback 里，参数是控件的新值。
+
+    tab:Toggle{...}
+        Key, Name, Desc, Default, Callback(v)
+        最简单的开关，右侧勾选框。
+
+    tab:Section{ Name = "分组名" }
+        分组标题，把下面几行归到一起。
+
+    tab:Label{ Name, Desc }
+        只显示文字，不可交互。
+
+    tab:Divider()
+        水平分隔线。
+
+    tab:Input{...}
+        Key, Name, Desc, Default, Min, Max, Callback(v)
+        数字输入框，失焦时提交。带 Min/Max 会自动夹取值。
+
+    tab:Slider{...}
+        Key, Name, Desc, Min, Max, Default, Callback(v)
+        拖动条。
+
+    tab:Cycle{...}
+        Key, Name, Desc, Options = {"选项1","选项2"}, DefaultIndex, Callback(idx, text)
+        ⚠ 回调第一个参数是【索引数字】，第二个才是文字。
+        这样上游的 setter 可以直接 if v == 1 / v == 2 判断。
+
+    tab:Expand{...}
+        Key, Name, Desc, Default, Callback(v)
+        Children = { ... }         子项列表
+        Cycle = { Key, Options, DefaultIndex, Callback(idx) }   可选的右侧切换按钮
+        主行有勾选框，点箭头展开子项。
+        子项支持 Kind = "toggle" / "number" / "cycle" / "slider"：
+            { Kind = "toggle", Key = "k", Name = "子开关", Default = false, Callback = function(v) end }
+            { Kind = "number", Key = "k", Name = "子数值", Min = 1, Max = 10, Default = 5, Callback = function(v) end }
+            { Kind = "cycle",  Key = "k", Name = "子选项", Options = {"A","B"}, Callback = function(idx) end }
+            { Kind = "slider", Key = "k", Name = "子滑条", Min = 0, Max = 100, Default = 50, Callback = function(v) end }
+
+    tab:Buttons{ Buttons = { { Name = "按钮1", Callback = function() end }, ... } }
+        一行并排放多个按钮。
+
+    tab:ClickableRow{...}
+        Name, Desc, Arrow, Callback
+        整行可点击，带右箭头，适合"打开某某"之类的入口。
+
+    tab:RowButton{ Name, Callback }
+        单个按钮行。
+
+    tab:Dropdown{...}
+        Key, Name, Desc, Options, Default, Callback(v)
+        下拉菜单。
+
+    tab:ColorPicker{...}
+        Key, Name, Desc, Default, Callback(color)
+        颜色选择器。
+
+    tab:TextBox{...}
+        Key, Name, Desc, Default, Callback(text)
+        文本输入框。
+
+    tab:Progress{...}
+        Name, Value, Max
+        进度条，可用 ctrl.Set(v) 更新。
+
+    tab:Body2D(cfg)
+        自由摆布 2D 元素的容器。
+
+    ────────────────────────────────────────────────────────────
+    控件对象（tab.Rows[key]）
+    ────────────────────────────────────────────────────────────
+        每个控件都会登记到 tab.Rows[Key]，可以事后操作：
+            tab.Rows.k1.Set(true)        设置值（会触发 Callback）
+            tab.Rows.k1.SetSilent(true)  设置值（不触发 Callback）
+            tab.Rows.k1.Get()            读取当前值
+
+        这在做"互斥功能"时特别有用：A 打开时把 B 的勾选框刷掉。
+
+    ────────────────────────────────────────────────────────────
+    抽屉/状态互斥示例
+    ────────────────────────────────────────────────────────────
+        local aCtrl = tab:Toggle({ Key = "a", Name = "功能A", Callback = function(v)
+            if v then
+                -- A 开了，把 B 关掉（逻辑 + 界面一起）
+                if win.State.b then
+                    win:Get("b")        -- 读旧值
+                    tab.Rows.b.SetSilent(false)
+                    win.State.b = false
+                end
+            end
+        end })
+
+    ────────────────────────────────────────────────────────────
+    自定义主题 / 尺寸
+    ────────────────────────────────────────────────────────────
+        在 UI.Create 之前改：
+            UI.Theme.panel  = Color3.fromRGB(15, 15, 18)
+            UI.Theme.accent = Color3.fromRGB(0, 170, 255)
+            UI.Layout.panelH = 600
+            UI.Size.radius   = 6
+
+        常用字段见文件里的 T（主题）、LAYOUT（布局）、SIZE（控件尺寸）。
+
+    ────────────────────────────────────────────────────────────
+    重载 / 清理
+    ────────────────────────────────────────────────────────────
+        重复 loadstring 时，库会自动调用上一次的清理函数：
+        面板淡出缩小消失，然后才真正销毁，观感不会突兀。
+
+        想手动清理：
+            if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
+
+    ────────────────────────────────────────────────────────────
+    注意事项
+    ────────────────────────────────────────────────────────────
+    1. Cycle / Expand 里的 Cycle 回调，第一个参数是索引（数字），
+       不是选项文字。别写成 function(text)，会拿到数字。
+    2. Expand 的子项必须写 Kind 字段，不写会被忽略（不报错，但不会显示）。
+    3. 面板挂在 CoreGui 里，模拟点击（VirtualInputManager）打不到，
+       只能用真实鼠标/手指操作。
+    4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
 --]]
--- CDMUI v1.4.1  Expand 子项支持 toggle；勾选框改用 Activated 事件
+-- CDMUI v1.4.2  退出动画（重载/卸载时面板和顶栏按钮平滑淡出）；完善使用文档
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -33,7 +169,112 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.1"
+UI.Version = "1.4.2"
+
+-- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
+-- 返回一个函数：调用它会等动画播完（yield）
+function UI.PlayExitAnim(duration)
+    -- 手机端动画稍微长一点，触屏看起来更顺
+    if not duration then
+        local uis = game:GetService("UserInputService")
+        local mobile = uis.TouchEnabled and not uis.KeyboardEnabled
+        duration = mobile and 0.28 or 0.24
+    end
+    local wins = _G._CDMUILiveWindows or {}
+    for _, w in ipairs(wins) do
+        if type(w) == "table" then
+            pcall(function()
+                local panel = w.Panel
+                local sc = w.Scale
+                local gui = w.Gui
+
+                if panel and panel.Parent then
+                    local basePos = panel.Position
+                    TweenService:Create(panel, TweenInfo.new(duration * 0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                        BackgroundTransparency = 1,
+                    }):Play()
+                    TweenService:Create(panel, TweenInfo.new(duration * 0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                        Position = UDim2.new(basePos.X.Scale, basePos.X.Offset,
+                                              basePos.Y.Scale, basePos.Y.Offset - 20),
+                    }):Play()
+                    if sc then
+                        TweenService:Create(sc, TweenInfo.new(duration * 0.9, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+                            Scale = 0.85,
+                        }):Play()
+                    end
+                    -- 所有元素一起淡出（Frame 的底色、描边、文字、图片全都要）
+                    local fadeT = TweenInfo.new(duration * 0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                    for _, d in ipairs(panel:GetDescendants()) do
+                        pcall(function()
+                            if d:IsA("Frame") or d:IsA("ScrollingFrame") then
+                                TweenService:Create(d, fadeT, { BackgroundTransparency = 1 }):Play()
+                                -- ScrollingFrame 的滚动条是内置属性，要单独淡化
+                                if d:IsA("ScrollingFrame") then
+                                    pcall(function()
+                                        d.ScrollBarImageTransparency = 1   -- 立即隐藏滚动条
+                                    end)
+                                end
+                            elseif d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                                TweenService:Create(d, fadeT, {
+                                    TextTransparency = 1,
+                                    BackgroundTransparency = 1,
+                                }):Play()
+                            elseif d:IsA("ImageLabel") or d:IsA("ImageButton") then
+                                TweenService:Create(d, fadeT, {
+                                    ImageTransparency = 1,
+                                    BackgroundTransparency = 1,
+                                }):Play()
+                            elseif d:IsA("UIStroke") then
+                                TweenService:Create(d, fadeT, { Transparency = 1 }):Play()
+                            end
+                        end)
+                    end
+                end
+
+                -- 顶栏按钮一起淡出（缩小 + 所有子元素淡化）
+                local tb = w.TopbarBtn
+                if tb and tb.Parent then
+                    pcall(function()
+                        local inner = tb:FindFirstChild("IconButton")
+                        if inner then
+                            TweenService:Create(inner, TweenInfo.new(duration * 0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                                BackgroundTransparency = 1,
+                            }):Play()
+                        end
+                        local spot = tb:FindFirstChild("IconSpot", true)
+                        if spot then
+                            TweenService:Create(spot, TweenInfo.new(duration * 0.75), {
+                                BackgroundTransparency = 1,
+                            }):Play()
+                        end
+                        for _, d in ipairs(tb:GetDescendants()) do
+                            if d:IsA("TextLabel") or d:IsA("ImageLabel") then
+                                pcall(function()
+                                    TweenService:Create(d, TweenInfo.new(duration * 0.7), {
+                                        TextTransparency = 1,
+                                        ImageTransparency = 1,
+                                    }):Play()
+                                end)
+                            end
+                        end
+                        -- 整体缩小消失
+                        TweenService:Create(tb, TweenInfo.new(duration * 0.85, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+                            Size = UDim2.new(0, 0, 0, 44),
+                        }):Play()
+                    end)
+                end
+            end)
+        end
+    end
+
+    -- 返回等待函数，调用方 await 它就能准确知道什么时候销毁
+    return function()
+        local t0 = os.clock()
+        while os.clock() - t0 < duration + 0.02 do
+            RunService.RenderStepped:Wait()
+        end
+    end
+end
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -901,6 +1142,8 @@ local function createTopbarButton(self, labelText)
     end)
 
     self.TopbarButton = widget
+    -- 记到窗口上，退出动画时一起淡出
+    self.TopbarBtn = widget
     return widget
 end
 -- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
@@ -1061,7 +1304,7 @@ function UI.Create(opts)
         ZIndex = 3,
         ScrollingDirection = Enum.ScrollingDirection.X,
         CanvasSize = UDim2.new(0, 0, 0, 0),
-        ScrollBarThickness = 3,
+        ScrollBarThickness = IS_MOBILE and 5 or 3,
         ScrollBarImageColor3 = Color3.fromRGB(120, 120, 130),
         ScrollBarImageTransparency = 0.35,
         ElasticBehavior = Enum.ElasticBehavior.Never,
@@ -1118,9 +1361,11 @@ function UI.Create(opts)
             local dy = input.Position.Y - dragStartY
             local dx = curX - dragStartX
 
+            -- 手机手指滑动的起始抖动比鼠标大，阈值放低一点更好拖
+            local DRAG_TH = IS_MOBILE and 12 or 18
             if not dragMoved
-               and math.abs(dx) > 18
-               and math.abs(dx) > math.abs(dy) * 1.5 then
+               and math.abs(dx) > DRAG_TH
+               and math.abs(dx) > math.abs(dy) * (IS_MOBILE and 1.2 or 1.5) then
                 dragMoved = true
                 setTabsActive(false)
                 -- 判定成拖动这一刻重新取基准，别把判定距离补上去
@@ -1236,15 +1481,42 @@ function UI.Create(opts)
     -- 登记到全局：下次加载库时会自动销毁这个窗口
     if type(_G._CDMUILiveWindows) ~= "table" then _G._CDMUILiveWindows = {} end
     table.insert(_G._CDMUILiveWindows, self)
+    -- 重载时：先播退出动画，再延迟销毁
     _G._CDMUILastCleanup = function()
-        for _, w in ipairs(_G._CDMUILiveWindows or {}) do
+        local old = _G._CDMUILiveWindows or {}
+        _G._CDMUILiveWindows = {}
+
+        for _, w in ipairs(old) do
             if type(w) == "table" and w.Destroyed ~= true then
-                -- 先摘掉 Busy，避免它卡在加载态
-                w.Busy = false
-                if w.Destroy then pcall(function() w:Destroy() end) end
+                pcall(function()
+                    w.Busy = false
+                    -- 断开所有连接，让交互先停掉
+                    for _, c in ipairs(w.Connections or {}) do
+                        pcall(function() c:Disconnect() end)
+                    end
+                    w.Connections = {}
+                    -- 注意：不要在这里设 Destroyed=true，
+                    -- 否则 PlayExitAnim 会跳过这个窗口
+                end)
             end
         end
+
+        -- 播动画（用刚清空前的列表，所以直接传进去）
+        _G._CDMUILiveWindows = old
+        UI.PlayExitAnim(0.22)
         _G._CDMUILiveWindows = {}
+
+        -- 延迟销毁
+        task.delay(0.24, function()
+            for _, w in ipairs(old) do
+                pcall(function()
+                    local gui = w.Gui
+                    if gui and gui.Parent then gui:Destroy() end
+                    local btn = w.TopbarBtn
+                    if btn and btn.Parent then btn:Destroy() end
+                end)
+            end
+        end)
     end
 
     -- 默认直接显示（原版是点顶栏按钮才弹，这里给个 AutoOpen 选项）
@@ -1683,14 +1955,12 @@ function Window:_ShowButtonGuide()
         end
     end
 
-
     sync()
     local syncConn = RunService.Heartbeat:Connect(function()
         pcall(sync)
     end)
 
     -- 箭头 + 文字向上弹跳，强化指向感
-
 
     -- 主光圈：脉冲式（每次脉冲重新亮起再淡出）
     local ringScale = mk("UIScale", { Scale = 1 }, ring)
@@ -2212,7 +2482,7 @@ function Window:LayoutTabs()
             -- 直接按 contentRight 走，滚到底正好贴边
             self.TabBar.CanvasSize = UDim2.new(0, contentRight, 0, 0)
             self.TabBar.ScrollingEnabled = true
-            self.TabBar.ScrollBarThickness = 3
+            self.TabBar.ScrollBarThickness = IS_MOBILE and 5 or 3
         else
             self.TabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
             self.TabBar.ScrollingEnabled = false
