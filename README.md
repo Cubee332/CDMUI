@@ -2,7 +2,7 @@
 
 Roblox / Luau 单文件控制面板 UI 库。零依赖，`loadstring` 直载。
 
-- **控件齐全** — Toggle / Slider / Cycle / Input / Keybind / MultiSelect / Expand / Label / Divider / Buttons
+- **控件齐全** — Toggle / Slider / Cycle / Input / Keybind / MultiSelect / Expand / Body2D / Dropdown / ColorPicker / TextBox / Progress / Section / Label / Divider / Buttons
 - **统一视觉** — 全库共用一套色阶与尺寸规范，改一处全局生效
 - **完整动效** — 面板进出场、Tab 收起展开、子项逐行撑开、勾选框缩放弹出、按钮按压回弹
 - **PC / 移动端自适应** — 统一管理两套尺寸，移动端放大点击区域、Tab 平分整行、支持拖动面板
@@ -243,6 +243,12 @@ win:Set("demo_toggle", true)       -- 写状态（不同步 UI 的 Callback）
 | `tab:Keybind(cfg)` | 按键绑定 |
 | `tab:MultiSelect(cfg)` | 多选 chips |
 | `tab:Expand(cfg)` | 可展开分组 |
+| `tab:Body2D(cfg)` | 标准 Roblox 小人，点选身体部位 |
+| `tab:Dropdown(cfg)` | 下拉选择 |
+| `tab:ColorPicker(cfg)` | 颜色选择（色相条） |
+| `tab:TextBox(cfg)` | 文本输入（非数字） |
+| `tab:Progress(cfg)` | 进度条（只读展示） |
+| `tab:Section(cfg)` | 分组标题 |
 | `tab:Label(cfg)` | 纯文字说明行 |
 | `tab:Divider()` | 分隔线 |
 | `tab:Buttons(cfg)` | 按钮行 |
