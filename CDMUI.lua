@@ -1638,7 +1638,8 @@ function Window:_ShowButtonGuide()
         end
     end)
 
-    task.delay(2.3, function()
+    -- 指引停留 5 秒（比之前的 2.3 秒更长，方便看清）
+    task.delay(5.0, function()
         if endConn then pcall(function() endConn:Disconnect() end) end
         finish()
     end)
@@ -2281,8 +2282,10 @@ function Tab:ClickableRow(cfg)
         Name = "RowHit",
         Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
-        Text = "",
+        Text = " ",              -- 非空文本，确保可点击
+        TextTransparency = 1,
         AutoButtonColor = false,
+        Selectable = true,
         ZIndex = 25,
         Active = true,
     }, row)
@@ -2305,11 +2308,20 @@ function Tab:ClickableRow(cfg)
     end)
 
     local busy = false
-    bindTap(hit, function()
+    local lastFire = 0
+    local function fire()
+        -- 防重入 + 防双击（250ms 内只触发一次）
         if busy then return end
+        local now = tick()
+        if now - lastFire < 0.25 then return end
+        lastFire = now
         playClick()
-        if cfg.Callback then cfg.Callback() end
-    end)
+        if cfg.Callback then pcall(cfg.Callback) end
+    end
+
+    -- 双通道触发：MouseButton1Click（标准）+ bindTap（兜底）
+    hit.MouseButton1Click:Connect(fire)
+    bindTap(hit, fire)
 
     local ctrl = {
         Frame = row,
@@ -2443,14 +2455,59 @@ function Tab:Expand(cfg)
     -- 箭头右边缘 = box 左边缘 - GAP
     local ARROW_RIGHT_OFFSET = CHECK_BOX_RIGHT + CHECK_W + GAP
 
-    local ctrl = makeCheckbox(row, CHECK_W, -CHECK_EDGE, function(v)
-        self.Window.State[key] = v
-        if cfg.Callback then cfg.Callback(v) end
-    end)
-    local initial = cfg.Default
-    if initial == nil then initial = false end
-    ctrl.SetSilent(initial)
-    self.Window.State[key] = initial
+    local ctrl
+    if cfg.Cycle then
+        -- 循环模式：右侧放一个左右切换的按钮，不用勾选框
+        local cy = cfg.Cycle
+        local opts = cy.Options or {}
+        local idx = cy.DefaultIndex or 1
+        local CW = IS_MOBILE and 96 or 82
+
+        local cycBtn = mk("TextButton", {
+            Name = "CycleBtn",
+            Size = UDim2.fromOffset(CW, IS_MOBILE and 30 or 26),
+            Position = UDim2.new(1, -(CW + 10), 0.5, -(IS_MOBILE and 15 or 13)),
+            BackgroundColor3 = T.cycleBg,
+            Text = tostring(opts[idx] or ""),
+            TextColor3 = T.ctrlText,
+            Font = FONT_BOLD,
+            TextSize = math.max(10, LAYOUT.ctrlText - 1),
+            AutoButtonColor = false,
+            ZIndex = 20,
+            Active = true,
+        }, row)
+        corner(cycBtn, 4)
+        stroke(cycBtn, T.ctrlStroke, 1, 0.4)
+
+        local function apply(newIdx)
+            idx = ((newIdx - 1) % #opts) + 1
+            cycBtn.Text = tostring(opts[idx] or "")
+            self.Window.State[key] = idx
+            if cy.Callback then pcall(cy.Callback, opts[idx], idx) end
+        end
+
+        bindTap(cycBtn, function()
+            playClick()
+            apply(idx + 1)
+        end)
+
+        ctrl = {
+            Frame = row,
+            Set = function(v) if type(v) == "number" then apply(v) end end,
+            Get = function() return idx end,
+            Cycle = apply,
+        }
+        self.Window.State[key] = idx
+    else
+        ctrl = makeCheckbox(row, CHECK_W, -CHECK_EDGE, function(v)
+            self.Window.State[key] = v
+            if cfg.Callback then cfg.Callback(v) end
+        end)
+        local initial = cfg.Default
+        if initial == nil then initial = false end
+        ctrl.SetSilent(initial)
+        self.Window.State[key] = initial
+    end
     self.Rows[key] = ctrl
 
     local arrowBtn = mk("TextButton", {
