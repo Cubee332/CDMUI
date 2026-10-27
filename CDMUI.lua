@@ -20,7 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
--- CDMUI v1.2.0  新增 Section / ColorPicker / Dropdown / TextBox / Progress 控件
+-- CDMUI v1.3.9  切换 Tab 时滚动与收起展开重叠进行；重复点当前 Tab 平滑滚回顶部
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
