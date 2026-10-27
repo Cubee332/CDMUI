@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.3.8
+    CDMUI 1.3.9
 
     Roblox 控制面板 UI 库，单文件，无外部依赖。
 
@@ -20,6 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
+-- CDMUI v1.3.9  切换 Tab 时滚动与收起展开重叠进行；重复点当前 Tab 平滑滚回顶部
 -- CDMUI v1.3.8  误触保护期从 2 秒改为 1 秒
 -- CDMUI v1.3.7  加运行代际，重复运行时旧实例的加载动画立即中止
 -- CDMUI v1.3.6  加载完成再加 2 秒保护期；指引不再被点击或开面板打断
@@ -42,7 +43,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.8"
+UI.Version = "1.3.9"
 
 -- ============================================================
 -- 重新运行时的自清理
@@ -2102,6 +2103,40 @@ end
 --   2) 高度变化会重算 CanvasSize，若 CanvasPosition=0 则内容始终贴着顶部，观感正确
 --   3) 不要手动冻结 AutomaticCanvasSize，容易算出错误的画布高度
 --   4) 滚动位置只在「旧页已完全收起」的瞬间归零，避免可见跳变
+-- 平滑滚动列表到顶部：从当前 CanvasPosition 缓动到 0
+function Window:_ScrollToTop(duration)
+    local list = self.List
+    if not list then return end
+
+    -- 已经在顶部就不折腾
+    if list.CanvasPosition.Y <= 1 then return end
+
+    local startY = list.CanvasPosition.Y
+    local dur = duration or 0.34
+    local t0 = tick()
+
+    -- 取消上一次滚动
+    if self._scrollConn then
+        pcall(function() self._scrollConn:Disconnect() end)
+        self._scrollConn = nil
+    end
+
+    self._scrollConn = RunService.RenderStepped:Connect(function()
+        local p = math.clamp((tick() - t0) / dur, 0, 1)
+        -- ease-out cubic，收尾更自然
+        local eased = 1 - (1 - p) ^ 3
+        if list and list.Parent then
+            list.CanvasPosition = Vector2.new(list.CanvasPosition.X, startY * (1 - eased))
+        end
+        if p >= 1 then
+            if self._scrollConn then
+                pcall(function() self._scrollConn:Disconnect() end)
+                self._scrollConn = nil
+            end
+        end
+    end)
+end
+
 function Window:SelectTab(index, instant)
     local tab = self.Tabs[index]
     if not tab then return end
@@ -2156,16 +2191,23 @@ function Window:SelectTab(index, instant)
 
     -- 首次 / 瞬间切换：直接完成
     if instant or last == index or not oldTab then
+        local sameTab = (last == index)
         for i, t in ipairs(self.Tabs) do
             setPage(t, i == index)
         end
-        self.List.CanvasPosition = Vector2.new(0, 0)
+
+        if sameTab and not instant then
+            -- 重复点同一个 Tab：平滑滚回顶部，别瞬移
+            self:_ScrollToTop(0.34)
+        else
+            self.List.CanvasPosition = Vector2.new(0, 0)
+        end
         return
     end
 
     -- 提速：收起 0.12s / 展开 0.18s，错开更小，减少等待感
-    local COLLAPSE_TIME = 0.12
-    local EXPAND_TIME = 0.18
+    local COLLAPSE_TIME = 0.10
+    local EXPAND_TIME = 0.16
     local STAGGER_OUT = 0.006
     local STAGGER_IN = 0.010
 
@@ -2178,23 +2220,34 @@ function Window:SelectTab(index, instant)
         end
     end
 
-    -- 1) 收起：高度归零，靠下的行先收
-    for idx, w in ipairs(oldRows) do
-        local fromBottom = (#oldRows - idx) * STAGGER_OUT
-        Anim.to(w, {
-            Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0),
-        }, COLLAPSE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In, fromBottom)
-    end
+    -- 换页动画：滚回顶部 + 收起 + 展开，三者重叠进行。
+    -- 分得太开会有"等一下、再等一下"的顿挫感，所以这里让它们同时跑。
+    local SCROLL_TIME = 0.20
+    local collapseTotal = COLLAPSE_TIME + #oldRows * STAGGER_OUT
 
-    -- 2) 切页并展开
-    task.delay(COLLAPSE_TIME + #oldRows * STAGGER_OUT + 0.04, function()
+    -- ① 滚回顶部（同时进行）
+    self:_ScrollToTop(SCROLL_TIME)
+
+    -- ② 收起几乎同时开始，不等滚动停
+    task.delay(0.02, function()
         if self.Destroyed or self.TabIndex ~= index then return end
 
-        -- 旧页彻底归零并隐藏
-        setPage(oldTab, false)
+        for idx, w in ipairs(oldRows) do
+            local fromBottom = (#oldRows - idx) * STAGGER_OUT
+            Anim.to(w, {
+                Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0),
+            }, COLLAPSE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In, fromBottom)
+        end
 
-        -- 此时旧页已不可见，把滚动位置归零不会产生可见跳变
-        self.List.CanvasPosition = Vector2.new(0, 0)
+        -- ③ 收起过半就开始展开，收尾和起头叠在一起
+        task.delay(collapseTotal * 0.55, function()
+            if self.Destroyed or self.TabIndex ~= index then return end
+
+            -- 旧页彻底归零并隐藏
+            setPage(oldTab, false)
+
+            -- 位置兜底，确保新页从顶部开始
+            self.List.CanvasPosition = Vector2.new(0, 0)
 
         -- 新页：先全部 0 高度 + 可见，再逐行撑开
         local newRows = {}
@@ -2238,6 +2291,7 @@ function Window:SelectTab(index, instant)
                 end
             end
         end
+        end)
     end)
 end
 function Window:Notify(text, duration)
