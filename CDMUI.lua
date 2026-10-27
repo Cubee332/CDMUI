@@ -799,24 +799,45 @@ local function createTopbarButton(self, labelText)
     }, iconSpot)
     corner(click, 999)
 
-    -- 游戏自带行为：只有内圈变白，外圈不动
-    local function setHover(on)
-        if on then
+    -- 三种状态：
+    --   常态   透明
+    --   悬浮   淡白（0.82）
+    --   激活   亮白（0.7，面板打开时保持）
+    local hovering = false
+    local active = false
+
+    local function applyVisual()
+        if active then
             iconSpot.BackgroundTransparency = 0.7
             hover.Visible = true
+        elseif hovering then
+            iconSpot.BackgroundTransparency = 0.82
+            hover.Visible = false
         else
             iconSpot.BackgroundTransparency = 1
             hover.Visible = false
         end
     end
 
-    click.MouseEnter:Connect(function() setHover(true) end)
-    click.MouseLeave:Connect(function() setHover(false) end)
+    click.MouseEnter:Connect(function()
+        hovering = true
+        applyVisual()
+    end)
+    click.MouseLeave:Connect(function()
+        hovering = false
+        applyVisual()
+    end)
 
-    -- 暴露给 Window：关闭面板 / 鼠标离开窗口时强制清掉高亮，
-    -- 否则面板关掉后顶栏按钮会卡在白色状态
+    -- 面板开 / 关时切换激活态
+    self.TopbarSetActive = function(on)
+        active = on and true or false
+        applyVisual()
+    end
+
+    -- 兼容旧接口：只清 hover
     self.TopbarResetHover = function()
-        setHover(false)
+        hovering = false
+        applyVisual()
     end
 
     bindTap(click, function()
@@ -824,6 +845,7 @@ local function createTopbarButton(self, labelText)
         -- 标记：这次是点顶栏按钮关闭的
         if self.Visible then self._closedByTopbar = true end
         self:SetVisible(not self.Visible)
+        if self.TopbarSetActive then self.TopbarSetActive(self.Visible) end
     end)
 
     self.TopbarButton = widget
@@ -1602,141 +1624,154 @@ end
 function Window:SetVisible(visible, instant)
     if self.Destroyed then return end
 
-    if not instant and self.Visible ~= (visible and true or false) then
-        playClick()
-    end
+    local wantVisible = visible and true or false
+    if not instant and self.Visible ~= wantVisible then playClick() end
+    self.Visible = wantVisible
 
-    self.Visible = visible and true or false
     local panel = self.Panel
-
-    if self.TopbarResetHover then
-        pcall(self.TopbarResetHover)
-    end
-
     local BASE_TRANS = 0.05
 
-    -- 面板里的内容行（Tab 栏 + 滚动区）
-    local function contentParts()
-        local parts = {}
-        if self.TabBar then table.insert(parts, self.TabBar) end
-        if self.List then table.insert(parts, self.List) end
-        return parts
+    if self.TopbarSetActive then pcall(self.TopbarSetActive, wantVisible) end
+
+    local parts = {}
+    if self.TabBar then table.insert(parts, self.TabBar) end
+    if self.List then table.insert(parts, self.List) end
+
+    -- 打断：把上一个动画批次取消掉，新动画从「当前属性值」接着走
+    self._seq = (self._seq or 0) + 1
+    local mySeq = self._seq
+    if self._batch then
+        for _, tw in ipairs(self._batch) do
+            pcall(function() tw:Cancel() end)
+        end
+    end
+    self._batch = {}
+    local function go(inst, props, dur, style, dir, delay)
+        if not inst then return end
+        local info = TweenInfo.new(dur, style or Enum.EasingStyle.Quad,
+            dir or Enum.EasingDirection.Out, 0, false, delay or 0)
+        local tw = TweenService:Create(inst, info, props)
+        table.insert(self._batch, tw)
+        tw:Play()
+        return tw
     end
 
-    if self.Visible then
+    if wantVisible then
         self.Gui.Enabled = true
-        -- 加载动画会把 Panel 藏起来，这里必须恢复
         panel.Visible = true
 
-        -- 清掉可能残留的指引（它会挡住点击）
+        -- 关键：不管上次怎么关的，先把面板恢复到"完全关闭的起点"
+        -- 否则被中断的关闭流程会留下 Transparency=1 / Scale=0.94 / Position偏移 等脏状态
+        if panel.BackgroundTransparency > 0.9 then
+            panel.BackgroundTransparency = 1
+            panel.Position = UDim2.new(0.5, 0, 0.5, 10)
+            if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.88 end
+            for _, w in ipairs(parts) do
+                local bt = w:GetAttribute("__baseTrans") or 0
+                w.BackgroundTransparency = math.min(1, bt + 0.6)
+            end
+        end
+
         if self._guideGui then
             pcall(function() self._guideGui:Destroy() end)
             self._guideGui = nil
         end
-        local okc, containers = pcall(function()
-            return { CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui") }
-        end)
-        if okc then
-            for _, container in ipairs(containers) do
-                if container then
-                    local g = container:FindFirstChild("CDMUIGuide")
-                    if g then pcall(function() g:Destroy() end) end
-                end
+        pcall(function()
+            for _, c in ipairs({CoreGui, Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")}) do
+                local g = c:FindFirstChild("CDMUIGuide")
+                if g then g:Destroy() end
             end
-        end
+        end)
 
         if instant then
             panel.Position = UDim2.new(0.5, 0, 0.5, 0)
             panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
             panel.BackgroundTransparency = BASE_TRANS
             if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
-            for _, w in ipairs(contentParts()) do
-                local base = w:GetAttribute("__basePos")
-                if base then w.Position = base end
+            for _, w in ipairs(parts) do
+                local bp = w:GetAttribute("__basePos")
+                if bp then w.Position = bp end
                 w.BackgroundTransparency = w:GetAttribute("__baseTrans") or 0
             end
             self.FirstShow = false
             return
         end
 
-        -- 第一次显示：完整入场（弹性放大 + 内容依次滑入）
-        -- 之后：快速浮现，不拖沓
         local isFirst = self.FirstShow
         self.FirstShow = false
+        local baseScale = self.BaseScale or 1
+
+        -- 打断时根据当前完成度缩短时长（避免"再来一遍"的卡顿感）
+        local curT = panel.BackgroundTransparency
+        local done = math.clamp((1 - curT) / (1 - BASE_TRANS), 0, 1)
+        local k = 1 - done * 0.55
 
         if isFirst then
-            -- 首帧：完全收起到中心，透明
-            panel.Position = UDim2.new(0.5, 0, 0.5, 24)
-            panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-            panel.BackgroundTransparency = 0.4
-            if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.82 end
-
-            -- 内容先藏起来
-            local parts0 = contentParts()
-            for _, w in ipairs(parts0) do
-                if not w:GetAttribute("__basePos") then
-                    w:SetAttribute("__basePos", w.Position)
+            -- ===== 首次入场（原版动画：14px 下浮 + 弹性放大 + 内容依次滑入）=====
+            if panel.BackgroundTransparency >= 0.95 then
+                panel.Position = UDim2.new(0.5, 0, 0.5, 14)
+                if self.Scale then self.Scale.Scale = baseScale * 0.82 end
+                for _, w in ipairs(parts) do
+                    local bp = w:GetAttribute("__basePos")
+                    if bp then
+                        w.Position = UDim2.new(bp.X.Scale, bp.X.Offset, bp.Y.Scale, bp.Y.Offset + 16)
+                    end
+                    w.BackgroundTransparency = math.min(1, (w:GetAttribute("__baseTrans") or 0) + 0.6)
                 end
-                local base = w:GetAttribute("__basePos")
-                w.Position = UDim2.new(base.X.Scale, base.X.Offset,
-                                       base.Y.Scale, base.Y.Offset + 20)
-                w.BackgroundTransparency = 1
             end
 
-            -- 面板：上浮 + 淡入 + 弹性放大
-            Anim.to(panel, {
+            go(panel, {
                 Position = UDim2.new(0.5, 0, 0.5, 0),
                 BackgroundTransparency = BASE_TRANS,
-            }, 0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+            }, 0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 
             if self.Scale then
-                Anim.to(self.Scale, { Scale = 1 }, 0.50,
+                go(self.Scale, { Scale = baseScale }, 0.44,
                     Enum.EasingStyle.Back, Enum.EasingDirection.Out)
             end
 
-            -- 内容：分三波滑入，有节奏感
-            local parts = contentParts()
-            local delay = 0.14
-            for idx, w in ipairs(parts) do
-                local base = w:GetAttribute("__basePos")
-                Anim.to(w, {
-                    Position = base,
+            local delay = 0.10
+            for _, w in ipairs(parts) do
+                local bp = w:GetAttribute("__basePos")
+                go(w, {
+                    Position = bp or w.Position,
                     BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
-                }, 0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
-                delay = delay + 0.08
+                }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
+                delay = delay + 0.07
             end
-            return
-        end
-
-        -- 起点：稍微缩小、稍微下移
-        panel.Position = UDim2.new(0.5, 0, 0.5, 10)
-        panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-        panel.BackgroundTransparency = BASE_TRANS
-        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.88 end
-
-        -- 面板：弹性放大（Back 过冲）
-        Anim.to(panel, { Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.34,
-            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-        if self.Scale then Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.42,
-            Enum.EasingStyle.Back, Enum.EasingDirection.Out) end
-
-        -- 内容：上移 + 淡入，依次错开
-        local parts = contentParts()
-        local delay = 0.08
-        for _, w in ipairs(parts) do
-            if not w:GetAttribute("__basePos") then
-                w:SetAttribute("__basePos", w.Position)
+        else
+            -- ===== 再次打开（原版：10px 下浮 + 弹性缩放）=====
+            if panel.BackgroundTransparency >= 0.95 then
+                panel.Position = UDim2.new(0.5, 0, 0.5, 10)
+                if self.Scale then self.Scale.Scale = baseScale * 0.88 end
+                for _, w in ipairs(parts) do
+                    local bp = w:GetAttribute("__basePos")
+                    if bp then
+                        w.Position = UDim2.new(bp.X.Scale, bp.X.Offset, bp.Y.Scale, bp.Y.Offset + 14)
+                    end
+                    w.BackgroundTransparency = math.min(1, (w:GetAttribute("__baseTrans") or 0) + 0.6)
+                end
             end
-            local base = w:GetAttribute("__basePos")
-            w.Position = UDim2.new(base.X.Scale, base.X.Offset,
-                                   base.Y.Scale, base.Y.Offset + 14)
-            w.BackgroundTransparency = math.min(1, (w:GetAttribute("__baseTrans") or 0) + 0.6)
 
-            Anim.to(w, {
-                Position = base,
-                BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
-            }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
-            delay = delay + 0.06
+            go(panel, {
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                BackgroundTransparency = BASE_TRANS,
+            }, 0.30 * k, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+            if self.Scale then
+                go(self.Scale, { Scale = baseScale }, 0.36 * k,
+                    Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end
+
+            local delay = 0.06
+            for _, w in ipairs(parts) do
+                local bp = w:GetAttribute("__basePos")
+                go(w, {
+                    Position = bp or w.Position,
+                    BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
+                }, 0.26 * k, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
+                delay = delay + 0.04
+            end
         end
 
     else
@@ -1745,50 +1780,53 @@ function Window:SetVisible(visible, instant)
             return
         end
 
-        -- 收起：缩小 + 下沉 + 淡出
-        local parts = contentParts()
-        for i, w in ipairs(parts) do
-            local base = w:GetAttribute("__basePos") or w.Position
-            Anim.to(w, {
-                Position = UDim2.new(base.X.Scale, base.X.Offset,
-                                     base.Y.Scale, base.Y.Offset + 8),
-                BackgroundTransparency = 1,
-            }, 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
-                (i - 1) * 0.02)
-        end
+        -- ===== 关闭（原版：向下 + 缩小 + 淡出）=====
+        local curT = panel.BackgroundTransparency
+        local done = math.clamp((curT - BASE_TRANS) / (1 - BASE_TRANS), 0, 1)
+        local k = math.max(0.25, 1 - done * 0.7)
+
+        go(panel, {
+            Position = UDim2.new(0.5, 0, 0.5, 8),
+            BackgroundTransparency = 1,
+        }, 0.18 * k, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
         if self.Scale then
-            Anim.to(self.Scale, { Scale = (self.BaseScale or 1) * 0.94 }, 0.16,
+            go(self.Scale, { Scale = (self.BaseScale or 1) * 0.94 }, 0.18 * k,
                 Enum.EasingStyle.Quad, Enum.EasingDirection.In)
         end
-        Anim.to(panel, {
-            Position = UDim2.new(0.5, 0, 0.5, 8),
-        }, 0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
-        task.delay(0.17, function()
-            if not self.Visible and self.Gui then
-                self.Gui.Enabled = false
-                if self.Panel then self.Panel.Visible = false end
-                -- 有顶栏按钮，且不是点按钮关闭 → 指引按钮位置
-                local byButton = self._closedByTopbar
+        for _, w in ipairs(parts) do
+            local bt = w:GetAttribute("__baseTrans") or 0
+            go(w, { BackgroundTransparency = math.min(1, bt + 0.5) },
+                0.14 * k, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        end
+
+        task.delay(0.20 * k + 0.02, function()
+            if self._seq ~= mySeq then return end        -- 被重新打开打断
+            if self.Visible then return end
+
+            self.Gui.Enabled = false
+            self.Panel.Visible = false
+            self.Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+            self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+            if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
+            for _, w in ipairs(parts) do
+                local bp = w:GetAttribute("__basePos")
+                if bp then w.Position = bp end
+                w.BackgroundTransparency = w:GetAttribute("__baseTrans") or 0
+            end
+
+            if self._closedByTopbar then
                 self._closedByTopbar = nil
-                if not byButton and self.TopbarButton and not self.GuideShown then
-                    task.spawn(function()
-                        pcall(function() self:_ShowButtonGuide() end)
-                    end)
-                end
-                self.Panel.Position = UDim2.new(0.5, 0, 0.5, 0)
-                self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-                if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
-                for _, w in ipairs(contentParts()) do
-                    local base = w:GetAttribute("__basePos")
-                    if base then w.Position = base end
-                    w.BackgroundTransparency = 0
-                end
+            elseif self.TopbarButton and not self.GuideShown then
+                task.spawn(function()
+                    pcall(function() self:_ShowButtonGuide() end)
+                end)
             end
         end)
     end
 end
+
 function Window:Toggle()
     self:SetVisible(not self.Visible)
 end
