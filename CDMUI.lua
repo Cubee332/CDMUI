@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.4.7
+    CDMUI 1.4.8
     Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
     ────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@
        只能用真实鼠标/手指操作。
     4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
 --]]
--- CDMUI v1.4.7  鼠标状态记录与还原；入场动画期间屏蔽悬停高亮；hook 全局单例
+-- CDMUI v1.4.8  悬停回调加动画期检查，彻底修掉入场时提前亮块
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -169,7 +169,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.7"
+UI.Version = "1.4.8"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1985,9 +1985,10 @@ function Window:_PlayIntro()
 
                 local maxRows = math.min(#rows, 14)
 
-                -- 入场期间把这行所有可交互元素都按住，
-                -- 否则鼠标停在上面会提前把背景点亮（行本身 Active 常是 false，
-                -- 真正接鼠标的是里面的按钮，所以要连后代一起处理）
+                -- 入场期间禁止悬停高亮
+                self._rowAnimating = true
+
+                -- 顺便把可交互元素按住
                 local savedActive = {}
                 local function setRowActive(w, on)
                     pcall(function()
@@ -2067,9 +2068,10 @@ function Window:_PlayIntro()
                     end)
                 end
 
-                -- 兜底：万一某行没播到，统一在整段动画后全部恢复
+                -- 兜底：整段动画结束后统一恢复交互和悬停
                 task.delay(0.30 + maxRows * 0.075 + 0.60, function()
                     if self.Destroyed then return end
+                    self._rowAnimating = false
                     for i = 1, maxRows do
                         if rows[i] then setRowActive(rows[i], true) end
                     end
@@ -2814,11 +2816,14 @@ function Window:Tab(name)
     tab.Button = btn
 
     btn.MouseEnter:Connect(function()
+        -- 入场动画期间不响应悬停，避免提前亮起
+        if self._tabAnimating then return end
         if self.TabIndex ~= tabIndex then
             tween(btn, 0.12, { BackgroundColor3 = T.rowHover })
         end
     end)
     btn.MouseLeave:Connect(function()
+        if self._tabAnimating then return end
         if self.TabIndex ~= tabIndex then
             tween(btn, 0.12, { BackgroundColor3 = T.tabIdle })
         end
@@ -3315,10 +3320,14 @@ local function baseRow(tab, height)
     tab.Items = tab.Items + 1
     table.insert(tab.Widgets, row)
 
+    -- 悬停高亮：入场动画期间直接忽略，
+    -- 否则鼠标提前停在某行上时，那一行会在文字还不透明时就先亮出一块底色
     row.MouseEnter:Connect(function()
+        if tab.Window._rowAnimating then return end
         tween(row, 0.12, { BackgroundColor3 = T.rowHover, BackgroundTransparency = 0.1 })
     end)
     row.MouseLeave:Connect(function()
+        if tab.Window._rowAnimating then return end
         tween(row, 0.12, { BackgroundColor3 = T.row, BackgroundTransparency = 0.15 })
     end)
     return row
