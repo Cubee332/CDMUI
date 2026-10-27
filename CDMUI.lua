@@ -20,7 +20,7 @@
         TopbarButton     是否生成左上角顶栏按钮，默认 true
 
 --]]
--- CDMUI v1.3.10  Cycle 回调改传索引（修所有下拉选项失效）；按钮加宽自适应；面板加宽字号调大
+-- CDMUI v1.3.11  Cycle 按钮宽度自适应最长选项；面板字号再调大一档
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -33,7 +33,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.3.10"
+UI.Version = "1.3.11"
 
 -- ============================================================
 -- 重新运行时的自清理
