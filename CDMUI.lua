@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.7.1  修复坐标系统偏移（GetMouseLocation 含 GuiInset）导致 Tab 拖动误判
+-- CDMUI v1.8.0  手机适配完善（触摸阈值、滚动条、禁用悬停、Tab栏加高）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.7.1"
+UI.Version = "1.8.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -768,7 +768,8 @@ local function bindTap(btn, fn)
         end
         startPos = nil
 
-        if moved < 12 then
+        -- 手机手指滑动时抖动大，阈值放宽
+        if moved < (IS_MOBILE and 18 or 12) then
             playClick()
             UI.safeCall(fn)
         end
@@ -798,7 +799,7 @@ local function attachInertia(frame, opts)
         frame.ElasticBehavior = Enum.ElasticBehavior.Never
     end)
 
-    local DRAG_TH   = IS_MOBILE and 6 or 4        -- 超过多少像素才算拖动
+    local DRAG_TH   = IS_MOBILE and 12 or 4       -- 超过多少像素才算拖动（手机手指抖动大）
     local MIN_SPEED = 0.15                        -- 低于这个速度就停
     local SAMPLE_WINDOW = 0.08                    -- 用最近多少秒的位移估算速度
 
@@ -1075,7 +1076,7 @@ local function attachInertia(frame, opts)
     -- 滚轮：立刻位移 + 轻微惯性
     --   关键：连续快速滚动时不要叠加加速，否则会「瞬移」
     --   做法是每格只注入固定的小速度，并限制总速度上限
-    local WHEEL_STEP  = 40          -- 每格立刻位移（40 约等于 2.5 行）
+    local WHEEL_STEP  = IS_MOBILE and 30 or 40   -- 每格立刻位移
     local WHEEL_SPEED = 8           -- 每格额外注入的惯性
     local WHEEL_MAX   = 20          -- 惯性速度上限
     local lastWheel = 0
@@ -2217,8 +2218,9 @@ function UI.Create(opts)
     -- Tab 栏
     local tabBar = mk("ScrollingFrame", {
         Name = "TabBar",
-        -- 高度就是 tabHeight（不再 +6），边界更干净
-        Size = UDim2.new(1, -LAYOUT.padX * 2, 0, LAYOUT.tabHeight),
+        -- 手机端高度略增，手指更好按
+        Size = UDim2.new(1, -LAYOUT.padX * 2, 0,
+            IS_MOBILE and LAYOUT.tabHeight + 4 or LAYOUT.tabHeight),
         Position = UDim2.new(0, LAYOUT.padX, 0, LAYOUT.tabY),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
@@ -2384,8 +2386,9 @@ function UI.Create(opts)
             -- 死区：3px 内不动（过滤点击时的鼠标抖动）
             --   超过死区立刻实时跟随（不用等阈值，拖起来才跟手）
             --   松手时按总位移判断是「点击」还是「拖动」
-            local DEAD_ZONE = IS_MOBILE and 4 or 3
-            local DRAG_TH   = IS_MOBILE and 8 or 6
+            -- 手机手指抖动大，死区放宽；拖动阈值也相应加大
+            local DEAD_ZONE = IS_MOBILE and 8 or 3
+            local DRAG_TH   = IS_MOBILE and 16 or 6
 
             if math.abs(dx) <= DEAD_ZONE then return end
 
@@ -2540,9 +2543,9 @@ function UI.Create(opts)
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         ZIndex = 3,
-        ScrollBarThickness = 4,
+        ScrollBarThickness = IS_MOBILE and 6 or 4,
         ScrollBarImageColor3 = Color3.fromRGB(100, 100, 110),
-        ScrollBarImageTransparency = 0.3,
+        ScrollBarImageTransparency = IS_MOBILE and 0.4 or 0.3,
         ScrollingDirection = Enum.ScrollingDirection.Y,
         CanvasSize = UDim2.new(0, 0, 0, 0),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
@@ -2578,8 +2581,8 @@ function UI.Create(opts)
     -- 底部提示
     local hint = mk("TextLabel", {
         Name = "Hint",
-        Size = UDim2.new(1, 0, 0, 24),
-        Position = UDim2.new(0, 0, 1, -30),
+        Size = UDim2.new(1, 0, 0, IS_MOBILE and 28 or 24),
+        Position = UDim2.new(0, 0, 1, IS_MOBILE and -34 or -30),
         BackgroundTransparency = 1,
         Text = self.Hint,
         TextColor3 = T.hint,
@@ -3900,6 +3903,8 @@ function Window:Tab(name)
     tab.Button = btn
 
     btn.MouseEnter:Connect(function()
+        -- 手机端不做悬停高亮
+        if IS_MOBILE then return end
         -- 入场动画期间不响应悬停，避免提前亮起
         if self._tabAnimating then return end
         if self.TabIndex ~= tabIndex then
@@ -4500,12 +4505,17 @@ local function baseRow(tab, height)
         tween(row, 0.12, { BackgroundColor3 = T.row, BackgroundTransparency = 0.15 })
     end
 
-    row.MouseEnter:Connect(onEnter)
-    row.MouseLeave:Connect(onLeave)
+    -- 手机端不做悬停高亮：触摸没有 hover 概念，
+    --   手指按下时会短暂触发 MouseEnter，松手又不触发 MouseLeave，
+    --   结果是「点过的行一直亮着」，反而更糟
+    if not IS_MOBILE then
+        row.MouseEnter:Connect(onEnter)
+        row.MouseLeave:Connect(onLeave)
+    end
 
     -- 登记到悬停刷新系统（滚动时鼠标不动也能正确高亮）
     --   注意：SetAttribute 不支持函数，回调存到弱表里
-    row:SetAttribute("__hoverEnter", true)
+    row:SetAttribute("__hoverEnter", not IS_MOBILE)
     _G.__CDMUIHoverFns = _G.__CDMUIHoverFns or setmetatable({}, { __mode = "k" })
     _G.__CDMUIHoverFns[row] = { enter = onEnter, leave = onLeave }
 
