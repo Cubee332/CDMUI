@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.6.1  顶栏退出动画改 Quad 缓动并强制归零，消除残留
+-- CDMUI v1.6.2  修复点击音效双响（ClickableRow 双通道触发 + 5 处重复 playClick）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.6.1"
+UI.Version = "1.6.2"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -656,8 +656,14 @@ end
 
 -- tap 判定：位移 < 12 才算点击（避免拖滚动条时误触）
 -- 用 pcall 包住位置运算，无头运行时里 InputObject.Position 可能不是 Vector2
+-- 统一的点击绑定
+--   · 音效只在这里播一次（控件内部不要再调 playClick）
+--   · 位移超过阈值视为拖动，不触发
+--   · 必须在本控件上按下并在本控件上抬起才算点击
+--   · 回调走 safeCall，单个出错不影响其它控件
 local function bindTap(btn, fn)
     local startPos = nil
+    local started = false
 
     local function posOf(input)
         local ok, p = pcall(function() return input.Position end)
@@ -669,6 +675,7 @@ local function bindTap(btn, fn)
         local ut = input.UserInputType
         if ut == Enum.UserInputType.Touch or ut == Enum.UserInputType.MouseButton1 then
             startPos = posOf(input)
+            started = true
         end
     end)
 
@@ -677,6 +684,11 @@ local function bindTap(btn, fn)
         if ut ~= Enum.UserInputType.Touch and ut ~= Enum.UserInputType.MouseButton1 then
             return
         end
+
+        -- 没有在本次控件上按下过，忽略（防止滑动经过时误触）
+        if not started then return end
+        started = false
+
         local endPos = posOf(input)
         local moved = 0
         if startPos and endPos then
@@ -684,13 +696,13 @@ local function bindTap(btn, fn)
             if ok and type(mag) == "number" then moved = mag end
         end
         startPos = nil
+
         if moved < 12 then
-            -- 统一在这里放音效，所有走 bindTap 的控件自动都有声音
             playClick()
-            -- 错误隔离：单个回调抛错不能影响其它控件
             UI.safeCall(fn)
         end
     end)
+
 end
 
 local function adaptiveScale()
@@ -3930,12 +3942,12 @@ function Tab:ClickableRow(cfg)
         local now = tick()
         if now - lastFire < 0.25 then return end
         lastFire = now
-        playClick()
-        if cfg.Callback then pcall(cfg.Callback) end
+        -- 音效由 bindTap 播放，这里不再调
+        if cfg.Callback then UI.safeCall(cfg.Callback) end
     end
 
-    -- 双通道触发：MouseButton1Click（标准）+ bindTap（兜底）
-    hit.MouseButton1Click:Connect(fire)
+    -- 只走 bindTap：它会统一处理音效、位移阈值和错误隔离
+    -- 不要再额外连 MouseButton1Click，否则一次点击会触发两遍
     bindTap(hit, fire)
 
     local ctrl = {
@@ -4001,7 +4013,7 @@ function Tab:RowButton(cfg)
     local busy = false
     bindTap(btn, function()
         if busy then return end
-        playClick()
+        -- 音效由 bindTap 统一播放，这里不要再调
         if cfg.Callback then UI.safeCall(cfg.Callback, btn) end
     end)
 
@@ -4392,7 +4404,7 @@ function Tab:Expand(cfg)
                 idx = idx % #options + 1
                 cyc.Text = tostring(options[idx])
                 self.Window.State[ckey] = idx
-                playClick()
+                -- 音效由 bindTap 统一播放
                 if child.Callback then UI.safeCall(child.Callback, options[idx], idx) end
             end)
             cyc.MouseEnter:Connect(function() tween(cyc, 0.1, { BackgroundColor3 = T.cycleHover }) end)
@@ -4491,7 +4503,7 @@ function Tab:Expand(cfg)
     bindTap(arrowBtn, function()
         expanded = not expanded
         self.Window.State[expandKey] = expanded
-        playClick()
+        -- 音效由 bindTap 统一播放
         -- 旋转带过冲回弹 + 尺寸弹性缩放
         Anim.to(arrowBtn, { Rotation = expanded and 180 or 0 }, 0.30,
             Enum.EasingStyle.Back, Enum.EasingDirection.Out)
@@ -5080,8 +5092,8 @@ function Tab:Body2D(cfg)
     childRow:SetAttribute("__expandKey", fold.key)
     childRow:SetAttribute("__h", CH_HEIGHT)
 
-    arrowBtn.MouseButton1Click:Connect(function()
-        playClick()
+    -- 走 bindTap：统一音效 + 位移保护 + 错误隔离
+    bindTap(arrowBtn, function()
         fold.toggle()
     end)
     -- 整行点击也能切换（但不要在箭头重复触发）
@@ -5096,8 +5108,7 @@ function Tab:Body2D(cfg)
         ZIndex = 3,
         Active = true,
     }, row)
-    rowHit.MouseButton1Click:Connect(function()
-        playClick()
+    bindTap(rowHit, function()
         fold.toggle()
     end)
 
