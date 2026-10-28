@@ -1,202 +1,237 @@
 --[[
-    CDMUI 1.5.0
-    Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  CDMUI 1.6.0                                                 ║
+    ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
+    ╚══════════════════════════════════════════════════════════════╝
 
-    ────────────────────────────────────────────────────────────
-    快速开始
-    ────────────────────────────────────────────────────────────
+    ┌──────────────────────────────────────────────────────────────┐
+    │  快速开始                                                     │
+    └──────────────────────────────────────────────────────────────┘
+
         local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
+
         local win = UI.Create({ Title = "我的面板" })
-
         local tab = win:Tab("基础")
-        tab:Toggle({ Key = "k1", Name = "开关", Desc = "点我试试", Default = false,
-            Callback = function(v) print("开关 =", v) end })
-        tab:Input({ Key = "k2", Name = "数值", Desc = "输入框", Default = "100",
-            Callback = function(v) print("数值 =", v) end })
 
-    ────────────────────────────────────────────────────────────
-    创建窗口 win = UI.Create{...}
-    ────────────────────────────────────────────────────────────
-        Title            面板标题，默认 "控制面板"
+        tab:Toggle({
+            Key = "enabled",
+            Name = "启用功能",
+            Desc = "点一下试试",
+            Default = false,
+            Callback = function(v) print("开关 =", v) end,
+        })
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  UI.Create 参数                                               │
+    └──────────────────────────────────────────────────────────────┘
+
+        Title            面板标题（默认 "控制面板"）
         TopbarText       顶栏按钮文字
-        AutoOpen         创建后是否自动显示，默认 true
-        AutoUnlockMouse  面板打开时是否解锁鼠标，默认 true
-        TopbarButton     是否生成左上角顶栏按钮，默认 true
-        ToggleKey        开关面板的快捷键（Enum.KeyCode）
+        AutoOpen         创建后是否自动显示（默认 true）
+        AutoUnlockMouse  面板打开时是否解锁鼠标（默认 true）
+        TopbarButton     是否生成左上角顶栏按钮（默认 true）
 
-    窗口方法：
-        win:Tab(name)              新建 Tab，返回 Tab 对象
-        win:SelectTab(i, instant)  切到第 i 个 Tab
-        win:SetVisible(bool)       显示/隐藏面板
-        win:Destroy()              销毁面板
-        win:Get(key)               读取控件当前值
+    ┌──────────────────────────────────────────────────────────────┐
+    │  Window 方法                                                  │
+    └──────────────────────────────────────────────────────────────┘
 
-    ────────────────────────────────────────────────────────────
-    控件一览
-    ────────────────────────────────────────────────────────────
-    所有控件的回调都在 Callback 里，参数是控件的新值。
+        win:Tab(name)               新建 Tab，返回 Tab 对象
+        win:SelectTab(i, instant)   切到第 i 个 Tab（instant=true 不播动画）
+        win:SetVisible(bool)        显示 / 隐藏面板
+        win:Toggle()                切换显示状态
+        win:Notify(text, sec)       弹一条提示
+        win:Destroy()               销毁面板
 
-    tab:Toggle{...}
+        ── 状态读写 ──
+        win:Get(key)                读当前值
+        win:Set(key, value)         设置值 + 重绘 + 触发 OnToggle
+        win:SetSilent(key, value)   设置值 + 重绘，不触发回调
+        win:SetMany({k1=v1, k2=v2}) 批量设置
+        win:RepaintAll()            把 State 全量同步到控件
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  控件清单（全部挂在 tab 上）                                   │
+    └──────────────────────────────────────────────────────────────┘
+
+    ── tab:Toggle ──────────────────────────────────────────────
         Key, Name, Desc, Default, Callback(v)
         最简单的开关，右侧勾选框。
 
-    tab:Section{ Name = "分组名" }
-        分组标题，把下面几行归到一起。
+    ── tab:Section ─────────────────────────────────────────────
+        Name
+        分组标题，纯视觉分隔。
 
-    tab:Label{ Name, Desc }
+    ── tab:Label ───────────────────────────────────────────────
+        Name, Desc
         只显示文字，不可交互。
 
-    tab:Divider()
-        水平分隔线。
+    ── tab:Divider ─────────────────────────────────────────────
+        水平分隔线，无参数。
 
-    tab:Input{...}
+    ── tab:Input ───────────────────────────────────────────────
         Key, Name, Desc, Default, Min, Max, Callback(v)
-        数字输入框，失焦时提交。带 Min/Max 会自动夹取值。
+        数字输入框，失焦提交。有 Min/Max 会自动夹取值。
 
-    tab:Slider{...}
+    ── tab:Slider ──────────────────────────────────────────────
         Key, Name, Desc, Min, Max, Default, Callback(v)
         拖动条。
 
-    tab:Cycle{...}
-        Key, Name, Desc, Options = {"选项1","选项2"}, DefaultIndex, Callback(idx, text)
+    ── tab:Cycle ───────────────────────────────────────────────
+        Key, Name, Desc, Options={"A","B"}, DefaultIndex, Callback(idx, text)
         ⚠ 回调第一个参数是【索引数字】，第二个才是文字。
-        这样上游的 setter 可以直接 if v == 1 / v == 2 判断。
+        ⚠ 默认值必须写 DefaultIndex，写 Default 无效。
 
-    tab:Expand{...}
+    ── tab:Expand ──────────────────────────────────────────────
         Key, Name, Desc, Default, Callback(v)
-        Children = { ... }         子项列表
-        Cycle = { Key, Options, DefaultIndex, Callback(idx) }   可选的右侧切换按钮
-        主行有勾选框，点箭头展开子项。
-        子项支持 Kind = "toggle" / "number" / "cycle" / "slider"：
-            { Kind = "toggle", Key = "k", Name = "子开关", Default = false, Callback = function(v) end }
-            { Kind = "number", Key = "k", Name = "子数值", Min = 1, Max = 10, Default = 5, Callback = function(v) end }
-            { Kind = "cycle",  Key = "k", Name = "子选项", Options = {"A","B"}, Callback = function(idx) end }
-            { Kind = "slider", Key = "k", Name = "子滑条", Min = 0, Max = 100, Default = 50, Callback = function(v) end }
+        Children = { ... }     子项列表
+        Cycle = { Key, Options, DefaultIndex, Callback(idx) }   可选右侧切换
 
-    tab:Buttons{ Buttons = { { Name = "按钮1", Callback = function() end }, ... } }
-        一行并排放多个按钮。
+        子项 Kind 支持四种（必须显式写）：
+            { Kind = "toggle", Key="k", Name="开关", Default=false, Callback=fn }
+            { Kind = "number", Key="k", Name="数值", Min=1, Max=10, Default=5, Callback=fn }
+            { Kind = "cycle",  Key="k", Name="选项", Options={"A","B"}, DefaultIndex=1, Callback=fn }
+            { Kind = "slider", Key="k", Name="滑条", Min=0, Max=100, Default=50, Callback=fn }
 
-    tab:ClickableRow{...}
+    ── tab:Buttons ─────────────────────────────────────────────
+        Buttons = { { Name="按钮1", Callback=fn }, ... }
+        一行并排多个按钮。
+
+    ── tab:ClickableRow ────────────────────────────────────────
         Name, Desc, Arrow, Callback
-        整行可点击，带右箭头，适合"打开某某"之类的入口。
+        整行可点击，带右箭头。
 
-    tab:RowButton{ Name, Callback }
+    ── tab:RowButton ───────────────────────────────────────────
+        Name, Callback
         单个按钮行。
 
-    tab:Dropdown{...}
+    ── tab:Dropdown ────────────────────────────────────────────
         Key, Name, Desc, Options, Default, Callback(v)
-        下拉菜单。
 
-    tab:ColorPicker{...}
+    ── tab:ColorPicker ─────────────────────────────────────────
         Key, Name, Desc, Default, Callback(color)
-        颜色选择器。
 
-    tab:TextBox{...}
+    ── tab:TextBox ─────────────────────────────────────────────
         Key, Name, Desc, Default, Callback(text)
-        文本输入框。
 
-    tab:Progress{...}
+    ── tab:Progress ────────────────────────────────────────────
         Name, Value, Max
-        进度条，可用 ctrl.Set(v) 更新。
+        进度条，用 ctrl.Set(v) 更新。
 
-    tab:Body2D(cfg)
-        自由摆布 2D 元素的容器。
+    ── tab:MultiSelect ─────────────────────────────────────────
+        Key, Name, Desc, Options, Default, Callback(tbl)
 
-    ────────────────────────────────────────────────────────────
-    控件对象（tab.Rows[key]）
-    ────────────────────────────────────────────────────────────
-        每个控件都会登记到 tab.Rows[Key]，可以事后操作：
-            tab.Rows.k1.Set(true)        设置值（会触发 Callback）
-            tab.Rows.k1.SetSilent(true)  设置值（不触发 Callback）
-            tab.Rows.k1.Get()            读取当前值
+    ── tab:Keybind ─────────────────────────────────────────────
+        Key, Name, Desc, Default, Callback(keyCode)
 
-        这在做"互斥功能"时特别有用：A 打开时把 B 的勾选框刷掉。
+    ── tab:Body2D ──────────────────────────────────────────────
+        Key, Name, Desc, Default, Callback(idx), Parts
+        Parts = { { Key=1, Name="头部" }, ... }
+        可折叠的人体部位选择器，默认收起，点标题行展开。
+        内部比例按 R6：头 60x60、躯干 90x90、四肢 45x90。
 
-    ────────────────────────────────────────────────────────────
-    抽屉/状态互斥示例
-    ────────────────────────────────────────────────────────────
+    ┌──────────────────────────────────────────────────────────────┐
+    │  控件对象（tab.Rows[key]）                                     │
+    └──────────────────────────────────────────────────────────────┘
+
+        每个控件都登记到 tab.Rows[key]，可事后操作：
+
+            tab.Rows.k1.Set(v)        设置值（会触发 Callback）
+            tab.Rows.k1.SetSilent(v)  只更新显示，不触发 Callback
+            tab.Rows.k1.Get()         读取当前值
+
+        用途：做功能互斥时，A 打开后把 B 的勾选框刷掉。
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  功能互斥示例                                                  │
+    └──────────────────────────────────────────────────────────────┘
+
         local aCtrl = tab:Toggle({ Key = "a", Name = "功能A", Callback = function(v)
-            if v then
-                -- A 开了，把 B 关掉（逻辑 + 界面一起）
-                if win.State.b then
-                    win:Get("b")        -- 读旧值
-                    tab.Rows.b.SetSilent(false)
-                    win.State.b = false
-                end
+            if v and win.State.b then
+                tab.Rows.b.SetSilent(false)   -- 界面关掉
+                win.State.b = false            -- 逻辑也关掉
             end
         end })
 
-    ────────────────────────────────────────────────────────────
-    自定义主题 / 尺寸
-    ────────────────────────────────────────────────────────────
+    ┌──────────────────────────────────────────────────────────────┐
+    │  主题 / 尺寸自定义                                             │
+    └──────────────────────────────────────────────────────────────┘
+
         在 UI.Create 之前改：
-            UI.Theme.panel  = Color3.fromRGB(15, 15, 18)
-            UI.Theme.accent = Color3.fromRGB(0, 170, 255)
+
+            UI.Theme.panel   = Color3.fromRGB(15, 15, 18)
+            UI.Theme.accent  = Color3.fromRGB(0, 170, 255)
             UI.Layout.panelH = 600
             UI.Size.radius   = 6
 
-        常用字段见文件里的 T（主题）、LAYOUT（布局）、SIZE（控件尺寸）。
+    ┌──────────────────────────────────────────────────────────────┐
+    │  动画 / 错误处理（高级）                                        │
+    └──────────────────────────────────────────────────────────────┘
 
-    ────────────────────────────────────────────────────────────
-    重载 / 清理
-    ────────────────────────────────────────────────────────────
-        重复 loadstring 时，库会自动调用上一次的清理函数：
-        面板淡出缩小消失，然后才真正销毁，观感不会突兀。
+        UI.Anim.to(inst, props, dur, style, dir, delay)
+            补间动画。同一实例同一属性的旧动画会自动取消。
 
-        想手动清理：
+        UI.Anim.cancel(inst)      立即取消该实例所有动画
+        UI.Anim.snap(inst, props) 立即设到终态（不走动画）
+
+        UI.safeCall(fn, ...)      安全调用（捕获错误，不中断 UI）
+        UI.GetErrorStats()        读取错误统计
+        UI.ClearErrors()          清空统计
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  重载 / 清理                                                   │
+    └──────────────────────────────────────────────────────────────┘
+
+        重复 loadstring 时会自动：
+            ① 播退出动画（面板 + 顶栏按钮淡出）
+            ② 等动画播完再建新面板
+            ③ 断开所有连接、还原鼠标 hook
+
+        手动清理：
             if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
 
-    ────────────────────────────────────────────────────────────
-    注意事项
-    ────────────────────────────────────────────────────────────
-    1. Cycle / Expand 里的 Cycle 回调，第一个参数是索引（数字），
-       不是选项文字。别写成 function(text)，会拿到数字。
-    2. Expand 的子项必须写 Kind 字段，不写会被忽略（不报错，但不会显示）。
-    3. 面板挂在 CoreGui 里，模拟点击（VirtualInputManager）打不到，
-       只能用真实鼠标/手指操作。
-    4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  接入新脚本必读（踩过的坑）                                     ║
+    ╚══════════════════════════════════════════════════════════════╝
 
-    ────────────────────────────────────────────────────────────
-    接入新脚本必读（踩过的坑）
-    ────────────────────────────────────────────────────────────
     ① Cycle / Expand.Cycle 的回调，第一个参数是【索引数字】。
        写成 function(text) 会拿到数字，判断全失效。
-       本库内部统一：Callback(idx, text)。
 
     ② Expand 的 Children 必须写 Kind 字段，支持四种：
            toggle / cycle / number / slider
-       写了别的 Kind 或漏写，子项会被静默忽略（不报错、不显示）。
+       漏写或写错 Kind，子项会被静默忽略（不报错、不显示）。
 
-    ③ 子项 toggle 没有 Kind 时不会被当成开关，必须显式写
-           { Kind = "toggle", Key = "k", Name = "开关", Callback = ... }
+    ③ Cycle 子项的默认值必须写 DefaultIndex：
+           { Kind="cycle", ..., Options={"A","B"}, DefaultIndex=2 }
+       只写 Default 不会生效，UI 永远显示第 1 项。
 
-    ④ 想要控件"默认值"和显示一致，Cycle 子项必须写 DefaultIndex：
-           { Kind = "cycle", ..., Options = {"A","B"}, DefaultIndex = 2 }
-       只写 Default 不会生效。
-
-    ⑤ Body2D 是折叠控件，默认收起，点标题行或箭头展开。
-       参数：Key / Name / Desc / Default / Callback(idx) / Parts
-       Parts = { { Key = 1, Name = "头部" }, ... }
+    ④ Body2D 默认收起，点标题行或箭头展开。
        Callback 收到的是选中的 Key（数字）。
 
-    ⑥ 所有可点击元素的音效由 bindTap 统一播放。
-       自己做按钮时请用 bindTap(btn, fn)，不要直接连 MouseButton1Click，
-       否则没有点击音效。确实要连的话手动调 playClick()。
+    ⑤ 所有可点击元素的音效由 bindTap 统一播放。
+       自制按钮请用 bindTap(btn, fn)，不要直接连 MouseButton1Click。
 
-    ⑦ 控件的值都存在 window.State[key]。
-       外部想同步界面用 tab.Rows[key].SetSilent(v)，
-       它会更新显示但【不】触发 Callback，避免死循环。
+    ⑥ 外部同步界面用 SetSilent()，不会触发 Callback，避免死循环。
+       需要业务逻辑也响应时用 Set()。
 
-    ⑧ 反复重载是安全的：cleanup 会断开连接、播退出动画、延迟销毁，
-       并把 __newindex 之类的临时钩子完全还原。
+    ⑦ 反复重载是安全的，cleanup 会完整还原所有状态。
 
-    ⑨ 鼠标锁定：游戏常会每帧强推 MouseBehavior，本库用 hook 稳住。
-       hook 是全局单例 + 引用计数，最后一个窗口销毁时才真正卸载。
+    ⑧ 鼠标 hook 是全局单例 + 引用计数，最后一个窗口销毁时才真正卸载。
 
-    ⑩ 不要在自己脚本里覆盖 _G._CDMUILastCleanup / _G._CDMUILiveWindows，
-       那是库的内部状态；需要清理时调 window:Destroy()。
+    ⑨ 不要覆盖 _G._CDMUILastCleanup / _G._CDMUILiveWindows，
+       那是库的内部状态；需要清理时调 win:Destroy()。
+
+    ⑩ 控件 Key 在同一 Tab 内必须唯一，重复会打警告并覆盖。
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  手机端说明                                                    │
+    └──────────────────────────────────────────────────────────────┘
+
+        自动检测（TouchEnabled 且非 KeyboardEnabled），相关尺寸在
+        LAYOUT 里已放大：行高 88、Tab 高 62、字号 +2、滚动条 5px。
+        退出动画 0.28s（PC 0.24s）。
+
 --]]
--- CDMUI v1.5.0  bindTap 内置音效；Body2D 修正 R6 比例+折叠；补全接入文档与坑位说明
+-- CDMUI v1.6.0  Anim 冲突管理/safeCall 错误隔离/State 单一数据源/折叠基类/完整文档
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -209,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.5.0"
+UI.Version = "1.6.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -299,8 +334,16 @@ function UI.PlayExitAnim(duration)
                 end
 
                 -- 顶栏按钮一起淡出（缩小 + 所有子元素淡化）
+                -- 注意：这只是视觉淡出，真正销毁由 cleanup 的 task.delay 负责；
+                -- 如果那个销毁被跳过，下次创建时必须能恢复，所以这里记录原始值
                 local tb = w.TopbarBtn
                 if tb and tb.Parent then
+                    -- 先取消该按钮上所有进行中的动画
+                    pcall(function() UI.Anim.cancel(tb) end)
+                    if w._topbarOriginalTrans == nil then
+                        local inner0 = tb:FindFirstChild("IconButton")
+                        w._topbarOriginalTrans = inner0 and inner0.BackgroundTransparency or GAME_BTN_TRANS
+                    end
                     pcall(function()
                         local inner = tb:FindFirstChild("IconButton")
                         if inner then
@@ -553,6 +596,39 @@ local function playClick()
     end)
 end
 
+-- ============================================================
+-- 错误隔离
+-- 任何用户回调抛错都不能中断 UI，更不能让整个面板卡死
+-- ============================================================
+local errorCount = 0
+local lastErrorMsg = nil
+
+-- 安全调用：返回 ok, err
+function UI.safeCall(fn, ...)
+    if type(fn) ~= "function" then return false, "not a function" end
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        errorCount = errorCount + 1
+        lastErrorMsg = tostring(err)
+        -- 只在控制台提示一次，避免刷屏
+        if errorCount <= 3 then
+            warn("[CDMUI] Callback error: " .. lastErrorMsg)
+        end
+    end
+    return ok, err
+end
+
+-- 读取错误统计（调试用）
+function UI.GetErrorStats()
+    return { count = errorCount, last = lastErrorMsg }
+end
+
+-- 清空错误统计
+function UI.ClearErrors()
+    errorCount = 0
+    lastErrorMsg = nil
+end
+
 -- tap 判定：位移 < 12 才算点击（避免拖滚动条时误触）
 -- 用 pcall 包住位置运算，无头运行时里 InputObject.Position 可能不是 Vector2
 local function bindTap(btn, fn)
@@ -586,7 +662,8 @@ local function bindTap(btn, fn)
         if moved < 12 then
             -- 统一在这里放音效，所有走 bindTap 的控件自动都有声音
             playClick()
-            fn()
+            -- 错误隔离：单个回调抛错不能影响其它控件
+            UI.safeCall(fn)
         end
     end)
 end
@@ -599,17 +676,81 @@ local function adaptiveScale()
     return math.clamp(s, LAYOUT.scaleMin, LAYOUT.scaleMax)
 end
 
--- 动画
+-- ============================================================
+-- 动画管理器
+-- 核心保证：同一实例同一属性上的新旧动画不会打架
+--   （历史上「折叠收不起来」「尺寸抖动」都是并发动画互相覆盖导致的）
+-- ============================================================
 local Anim = {}
 
--- 基础补间
+-- inst -> { [propName] = Tween }
+local activeTweens = setmetatable({}, { __mode = "k" })
+
+local function cancelConflicts(inst, props)
+    local per = activeTweens[inst]
+    if not per then return end
+    for prop in pairs(props) do
+        local old = per[prop]
+        if old then
+            pcall(function() old:Cancel() end)
+            per[prop] = nil
+        end
+    end
+end
+
+-- 基础补间：自动取消冲突动画
 function Anim.to(inst, props, dur, style, dir, delay)
-    if not inst or not inst.Parent then return end
+    if not inst or not inst.Parent then return nil end
+
+    cancelConflicts(inst, props)
+
     local info = TweenInfo.new(dur or 0.2, style or Enum.EasingStyle.Quad,
         dir or Enum.EasingDirection.Out, 0, false, delay or 0)
-    local t = TweenService:Create(inst, info, props)
-    t:Play()
+    local ok, t = pcall(function() return TweenService:Create(inst, info, props) end)
+    if not ok or not t then return nil end
+
+    local per = activeTweens[inst]
+    if not per then per = {}; activeTweens[inst] = per end
+    for prop in pairs(props) do per[prop] = t end
+
+    -- 播完清掉登记
+    t.Completed:Connect(function()
+        local p2 = activeTweens[inst]
+        if not p2 then return end
+        for prop, cur in pairs(p2) do
+            if cur == t then p2[prop] = nil end
+        end
+    end)
+
+    pcall(function() t:Play() end)
     return t
+end
+
+-- 立即取消某实例上的动画（可选择只取消某些属性）
+function Anim.cancel(inst, propList)
+    if not inst then return end
+    local per = activeTweens[inst]
+    if not per then return end
+    if propList then
+        for _, prop in ipairs(propList) do
+            local t = per[prop]
+            if t then pcall(function() t:Cancel() end); per[prop] = nil end
+        end
+    else
+        for prop, t in pairs(per) do
+            pcall(function() t:Cancel() end)
+            per[prop] = nil
+        end
+    end
+end
+
+-- 立即把实例设到终态（不走动画），用于 destroy 或强制归位
+function Anim.snap(inst, props)
+    if not inst or not inst.Parent then return end
+    cancelConflicts(inst, props)
+    for k, v in pairs(props) do
+        pcall(function() inst[k] = v end)
+    end
 end
 
 -- 悬停反馈（颜色过渡，不改变透明度造成闪烁）
@@ -869,7 +1010,7 @@ local function makeButton(parent, cfg)
         tween(btn, 0.1, { Size = UDim2.new(0, w, 0, h) }, Enum.EasingStyle.Back)
     end)
     bindTap(btn, function()
-        if cfg.Callback then cfg.Callback() end
+        if cfg.Callback then UI.safeCall(cfg.Callback) end
     end)
 
     return btn
@@ -1055,18 +1196,18 @@ end
 -- ============================================================
 -- 窗口
 -- ============================================================
+-- 顶栏按钮配色（和游戏自带按钮一致）
+--   深色底 + 轻微透明；hover 时内圈变亮
+local GAME_BTN_BG    = Color3.fromRGB(18, 18, 21)
+local GAME_BTN_TRANS = 0.08
+local GAME_BTN_HOVER = 0.30
+
 local Window = {}
 Window.__index = Window
-local Tab = {}
-Tab.__index = Tab
+local Tab = {
 
--- 顶栏按钮：
---   样式 = 游戏自带按钮（18,18,21 深色 + 圆角胶囊 + 白字）
---   字号 = 原版 16 + GothamMedium
---   放进 TopbarStandard.Holders.Left 后，Roblox 平台会自动给悬停气泡提示
-local GAME_BTN_BG      = Color3.fromRGB(18, 18, 21)
-local GAME_BTN_TRANS   = 0.08
-local GAME_BTN_HOVER   = 0.30
+}
+Tab.__index = Tab
 
 local function createTopbarButton(self, labelText)
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
@@ -1082,6 +1223,10 @@ local function createTopbarButton(self, labelText)
     -- 宽度照原版：90x44
     local widgetW = 90
 
+    -- 先清掉可能残留的旧按钮，避免两个叠在一起 / 透明度被上一个动画带坏
+    local oldWidget = left:FindFirstChild("CDMUIWidget")
+    if oldWidget then pcall(function() oldWidget:Destroy() end) end
+
     local widget = mk("Frame", {
         Name = "CDMUIWidget",
         Size = UDim2.new(0, widgetW, 0, 44),
@@ -1090,6 +1235,8 @@ local function createTopbarButton(self, labelText)
         ZIndex = 20,
         LayoutOrder = 90,
     }, left)
+    -- 明确重置：上一轮退出动画可能把它留在透明状态
+    widget.Size = UDim2.new(0, widgetW, 0, 44)
 
     -- 外圈：游戏自带同款深色底（hover 时不变）
     local bg = mk("Frame", {
@@ -1100,6 +1247,8 @@ local function createTopbarButton(self, labelText)
         BorderSizePixel = 0,
         ZIndex = 2,
     }, widget)
+    -- 强制写一次，防止被上一轮的淡出动画残留影响
+    bg.BackgroundTransparency = GAME_BTN_TRANS
     corner(bg, 999)
 
     -- 内圈：hover 时这个变白（游戏自带行为）
@@ -1221,12 +1370,127 @@ local function createTopbarButton(self, labelText)
             Anim.to(c, { BackgroundTransparency = target }, 0.3,
                 Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
         end
+        -- 兜底：确保外圈底色一定恢复（防止被上一轮淡出动画干扰）
+        task.delay(0.4, function()
+            if bg and bg.Parent then
+                pcall(function() bg.BackgroundTransparency = GAME_BTN_TRANS end)
+            end
+        end)
     end)
 
     self.TopbarButton = widget
     -- 记到窗口上，退出动画时一起淡出
     self.TopbarBtn = widget
     return widget
+end
+
+-- ============================================================
+-- 控件注册
+-- 统一入口，带 key 冲突检测和接口校验
+-- ============================================================
+local function registerControl(tab, key, ctrl)
+    if type(key) ~= "string" or key == "" then
+        warn("[CDMUI] 控件缺少有效的 Key，已跳过注册")
+        return ctrl
+    end
+    -- 检测重复 key（同一 Tab 内）
+    if tab.Rows[key] ~= nil then
+        warn("[CDMUI] Key '" .. key .. "' 在该 Tab 内重复，后者覆盖前者")
+    end
+    -- 保证至少有 Set / Get
+    if type(ctrl) == "table" then
+        if type(ctrl.Get) ~= "function" then
+            warn("[CDMUI] 控件 '" .. key .. "' 缺少 Get 方法")
+        end
+        if type(ctrl.Set) ~= "function" then
+            warn("[CDMUI] 控件 '" .. key .. "' 缺少 Set 方法")
+        end
+    end
+    tab.Rows[key] = ctrl
+    return ctrl
+end
+
+-- ============================================================
+-- 折叠基类
+-- Expand 和 Body2D 共用：
+--   · 主行 + 箭头 + 子内容区
+--   · 状态存 Window.State[expandKey]
+--   · 切页时由 ExpandRestorers 统一恢复
+--   · 收起时必须 Visible=false（否则 UIListLayout 会留 6px 间隙）
+-- ============================================================
+local function makeFoldable(tab, opts)
+    local window = tab.Window
+    local expandKey = opts.expandKey
+    local row = opts.row
+    local arrowBtn = opts.arrow
+    local onState = opts.onState           -- function(open, animate, delay)
+    local arrowSize = opts.arrowSize or LAYOUT.arrowSize
+    local ARROW_W = arrowSize
+
+    -- 状态初始化
+    if window.State[expandKey] == nil then
+        window.State[expandKey] = false
+    end
+
+    local function currentState()
+        return window.State[expandKey] == true
+    end
+
+    -- 设置展开状态（唯一入口）
+    local function setOpen(open, animate, delay)
+        open = open and true or false
+        window.State[expandKey] = open
+        if onState then
+            local ok, err = pcall(onState, open, animate, delay)
+            if not ok then
+                warn("[CDMUI] 折叠状态应用失败: " .. tostring(err))
+            end
+        end
+        -- 箭头统一处理
+        if arrowBtn and arrowBtn.Parent then
+            if animate then
+                Anim.to(arrowBtn, { Rotation = open and 180 or 0 }, 0.24,
+                    Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+            else
+                Anim.snap(arrowBtn, { Rotation = open and 180 or 0 })
+            end
+        end
+    end
+
+    -- 切换
+    local function toggle()
+        setOpen(not currentState(), true, 0)
+    end
+
+    -- 注册到切页恢复器
+    -- 注意：apply 只改界面，绝不写 State。
+    -- setPage 会对「非当前页」调用 apply(false) 来隐藏内容，
+    -- 如果这里顺手写了 State，切页会把用户的真实选择覆盖掉。
+    table.insert(window.ExpandRestorers, {
+        tab = tab,
+        expandKey = expandKey,
+        panelRow = row,
+        get = function() return window.State[expandKey] == true end,
+        apply = function(open)
+            local show = open == true
+            if onState then
+                local ok, err = pcall(onState, show, false, 0)
+                if not ok then
+                    warn("[CDMUI] 折叠状态应用失败: " .. tostring(err))
+                end
+            end
+            if arrowBtn and arrowBtn.Parent then
+                Anim.snap(arrowBtn, { Rotation = show and 180 or 0 })
+            end
+        end,
+    })
+
+    return {
+        key = expandKey,
+        isOpen = currentState,
+        setOpen = setOpen,
+        toggle = toggle,
+    }
 end
 -- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
 local function bindShieldClose(self)
@@ -1908,6 +2172,12 @@ function Window:_PlayIntro()
                                 -- 动画期间画布保持「撑满」，避免滚动条在最后一帧跳动
                                 -- 先解锁，再延迟一帧恢复布局，滚动条变化就不会被看到
                                 self._tabAnimating = false
+                                -- 动画结束，恢复滚动条显示
+                                if self.TabBar and self.TabBar.Parent then
+                                    pcall(function()
+                                        self.TabBar.ScrollBarImageTransparency = 0.35
+                                    end)
+                                end
                                 -- 恢复 Tab 交互
                                 for i, tb in ipairs(self.Tabs) do
                                     if tb.Button then
@@ -2002,6 +2272,12 @@ function Window:_PlayIntro()
                                     end
                                 end
                                 self._tabAnimating = false
+                                -- 动画结束，恢复滚动条显示
+                                if self.TabBar and self.TabBar.Parent then
+                                    pcall(function()
+                                        self.TabBar.ScrollBarImageTransparency = 0.35
+                                    end)
+                                end
                                 pcall(function() self:LayoutTabs() end)
                             end
                         end)
@@ -3230,16 +3506,15 @@ function Window:SelectTab(index, instant)
             -- 位置兜底，确保新页从顶部开始
             self.List.CanvasPosition = Vector2.new(0, 0)
 
-        -- 新页：先全部 0 高度 + 可见，再逐行撑开
+        -- 新页：统一走 setPage（和 instant 分支共用同一套逻辑，
+        -- 避免「改一处忘另一处」）。先把高度归 0，再由下面的动画撑开。
+        setPage(tab, true)
+
         local newRows = {}
         for _, w in ipairs(tab.Widgets) do
             if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
                 local base = rememberBase(w)
-                w.Visible = true
                 w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                if w.Name == "Row" then
-                    w.BackgroundTransparency = 0.15
-                end
                 table.insert(newRows, w)
             end
         end
@@ -3273,25 +3548,14 @@ function Window:SelectTab(index, instant)
             end
         end
 
-        -- 全都撑开后再走一次兜底，确保 BodyChildRow 之类自管理显隐的行状态正确
+        -- 展开动画结束后再同步一次折叠状态（此时行高已稳定）
         task.delay(showDelay + EXPAND_TIME + 0.05, function()
             if self.Destroyed or self.TabIndex ~= index then return end
-            pcall(function()
-                for _, w in ipairs(tab.Widgets) do
-                    if w and w.Parent and w.Name == "BodyChildRow" then
-                        local ek = w:GetAttribute("__expandKey")
-                        local open = (ek ~= nil) and (self.State[ek] == true)
-                        local h = w:GetAttribute("__h") or 0
-                        if open then
-                            w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, h)
-                            w.Visible = true
-                        else
-                            w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                            w.Visible = false
-                        end
-                    end
+            for _, r in ipairs(restorers) do
+                if r.apply and r.get then
+                    pcall(r.apply, r.get())
                 end
-            end)
+            end
         end)
         end)
     end)
@@ -3337,20 +3601,76 @@ function Window:Notify(text, duration)
     end)
 end
 
+-- ============================================================
+-- 状态读写
+-- 约束：self.State 是唯一数据源；控件显示永远从 State 渲染
+--   Set()   -> 写 State + 重绘控件（不触发 Callback）
+--   Get()   -> 直接读 State
+-- 这样「UI 显示」和「实际逻辑」永远不会漂移
+-- ============================================================
 function Window:Get(key)
     return self.State[key]
 end
 
-function Window:Set(key, value)
-    self.State[key] = value
+-- 查找某 key 对应的控件（跨所有 Tab）
+function Window:_FindControl(key)
     for _, tab in ipairs(self.Tabs) do
-        local row = tab.Rows[key]
-        if row then
-            if row.Set then row:Set(value, true) end
-            break
+        local row = tab.Rows and tab.Rows[key]
+        if row then return row, tab end
+    end
+    return nil
+end
+
+-- 设置值
+--   fireCallback = true（默认）：写 State + 重绘 + 触发 Callback（业务逻辑同步）
+--   fireCallback = false       ：写 State + 重绘，不触发 Callback（纯界面同步）
+function Window:Set(key, value, fireCallback)
+    if fireCallback == nil then fireCallback = true end
+
+    -- 1) 先写 State（即使后续失败，逻辑状态也是对的）
+    self.State[key] = value
+
+    -- 2) 重绘控件
+    local ctrl = self:_FindControl(key)
+    if ctrl and type(ctrl.Set) == "function" then
+        local ok, err = pcall(ctrl.Set, ctrl, value, true)
+        if not ok then
+            warn("[CDMUI] Set(" .. tostring(key) .. ") 重绘失败: " .. tostring(err))
         end
     end
+
+    -- 3) 触发业务回调（可关闭）
+    if fireCallback then
+        local cb = self.OnToggle
+        if type(cb) == "function" then
+            UI.safeCall(cb, key, value)
+        end
+    end
+
     return value
+end
+
+-- 只更新界面，不触发回调（等价于 Set(key, value, false)）
+function Window:SetSilent(key, value)
+    return self:Set(key, value, false)
+end
+
+-- 批量设置（一次性写多个 key）
+function Window:SetMany(tbl)
+    for k, v in pairs(tbl) do
+        self:Set(k, v)
+    end
+end
+
+-- 把 State 全量同步到控件（重载后恢复界面用）
+function Window:RepaintAll()
+    for _, tab in ipairs(self.Tabs) do
+        for key, ctrl in pairs(tab.Rows or {}) do
+            if type(ctrl.Set) == "function" and self.State[key] ~= nil then
+                pcall(ctrl.Set, ctrl, self.State[key], true)
+            end
+        end
+    end
 end
 
 function Window:Destroy()
@@ -3515,11 +3835,11 @@ function Tab:Toggle(cfg)
 
     local ctrl = makeCheckbox(row, LAYOUT.boxSize, -6, function(v)
         self.Window.State[key] = v
-        if cfg.Callback then cfg.Callback(v) end
+        if cfg.Callback then UI.safeCall(cfg.Callback, v) end
     end)
     ctrl.SetSilent(initial)
 
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -3657,7 +3977,7 @@ function Tab:RowButton(cfg)
     bindTap(btn, function()
         if busy then return end
         playClick()
-        if cfg.Callback then cfg.Callback(btn) end
+        if cfg.Callback then UI.safeCall(cfg.Callback, btn) end
     end)
 
     local ctrl = {
@@ -3766,7 +4086,7 @@ function Tab:Expand(cfg)
             cycBtn.Text = tostring(opts[idx] or "")
             self.Window.State[key] = idx
             -- 同样把索引放第一位
-            if cy.Callback then pcall(cy.Callback, idx, opts[idx]) end
+            if cy.Callback then UI.safeCall(cy.Callback, idx, opts[idx]) end
         end
 
         bindTap(cycBtn, function()
@@ -3783,14 +4103,14 @@ function Tab:Expand(cfg)
     else
         ctrl = makeCheckbox(row, CHECK_W, -CHECK_EDGE, function(v)
             self.Window.State[key] = v
-            if cfg.Callback then cfg.Callback(v) end
+            if cfg.Callback then UI.safeCall(cfg.Callback, v) end
         end)
         local initial = cfg.Default
         if initial == nil then initial = false end
         ctrl.SetSilent(initial)
         self.Window.State[key] = initial
     end
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
 
     local arrowBtn = mk("TextButton", {
         Name = "Arrow",
@@ -3938,7 +4258,7 @@ function Tab:Expand(cfg)
                 val = math.floor(val / st + 0.5) * st
                 renderSub()
                 self.Window.State[ckey] = val
-                if child.Callback then child.Callback(val) end
+                if child.Callback then UI.safeCall(child.Callback, val) end
             end
             hit.MouseButton1Down:Connect(function()
                 dragging = true
@@ -3971,11 +4291,11 @@ function Tab:Expand(cfg)
             -- 右边距要够大，否则会被 ChildRow 的 ClipsDescendants 裁掉
             local ctrl = makeCheckbox(ch, 22, -22, function(v)
                 self.Window.State[ckey] = v
-                if child.Callback then pcall(child.Callback, v) end
+                if child.Callback then UI.safeCall(child.Callback, v) end
             end)
             ctrl.SetSilent(child.Default and true or false)
             self.Window.State[ckey] = child.Default and true or false
-            self.Rows[ckey] = ctrl
+            registerControl(self, ckey, ctrl)
 
         elseif kind == "number" then
             local holder = mk("Frame", {
@@ -4007,7 +4327,7 @@ function Tab:Expand(cfg)
                     v = math.clamp(v, child.Min or child.min or 1, child.Max or child.max or 100)
                     box.Text = tostring(v)
                     self.Window.State[ckey] = v
-                    if child.Callback then child.Callback(v) end
+                    if child.Callback then UI.safeCall(child.Callback, v) end
                 else
                     box.Text = tostring(self.Window.State[ckey] or child.Default or 1)
                 end
@@ -4048,7 +4368,7 @@ function Tab:Expand(cfg)
                 cyc.Text = tostring(options[idx])
                 self.Window.State[ckey] = idx
                 playClick()
-                if child.Callback then child.Callback(options[idx], idx) end
+                if child.Callback then UI.safeCall(child.Callback, options[idx], idx) end
             end)
             cyc.MouseEnter:Connect(function() tween(cyc, 0.1, { BackgroundColor3 = T.cycleHover }) end)
             cyc.MouseLeave:Connect(function() tween(cyc, 0.1, { BackgroundColor3 = T.cycleBg }) end)
@@ -4063,13 +4383,13 @@ function Tab:Expand(cfg)
         else
             local sub = makeCheckbox(ch, LAYOUT.subBoxSize, -8, function(v)
                 self.Window.State[ckey] = v
-                if child.Callback then child.Callback(v) end
+                if child.Callback then UI.safeCall(child.Callback, v) end
             end)
             local init = child.Default
             if init == nil then init = false end
             sub.SetSilent(init)
             self.Window.State[ckey] = init
-            self.Rows[ckey] = sub
+            registerControl(self, ckey, sub)
         end
     end
 
@@ -4195,9 +4515,9 @@ function Tab:Cycle(cfg)
         self.Window.State[key] = i
         -- 第一个参数给索引，第二个给文字。
         -- 上游模块的 setter 基本都按索引判断，给文字会全部失效。
-        if cfg.Callback then cfg.Callback(i, opt) end
+        if cfg.Callback then UI.safeCall(cfg.Callback, i, opt) end
     end)
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -4217,9 +4537,9 @@ function Tab:Input(cfg)
         RightOffset = cfg.RightOffset or -230,
     }, function(v)
         self.Window.State[key] = v
-        if cfg.Callback then cfg.Callback(v) end
+        if cfg.Callback then UI.safeCall(cfg.Callback, v) end
     end)
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -4353,7 +4673,7 @@ function Tab:Slider(cfg)
         end
         value = math.clamp(raw, minV, maxV)
         render()
-        if cfg.Callback then cfg.Callback(value) end
+        if cfg.Callback then UI.safeCall(cfg.Callback, value) end
         self.Window.State[key] = value
     end
 
@@ -4388,7 +4708,7 @@ function Tab:Slider(cfg)
         end,
         Get = function() return value end,
     }
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -4433,7 +4753,7 @@ function Tab:Keybind(cfg)
             btn.Text = current.Name
             btn.TextColor3 = T.ctrlText
             self.Window.State[key] = current
-            if cfg.Callback then cfg.Callback(current) end
+            if cfg.Callback then UI.safeCall(cfg.Callback, current) end
         else
             btn.Text = current and current.Name or "未绑定"
             btn.TextColor3 = T.ctrlText
@@ -4444,7 +4764,7 @@ function Tab:Keybind(cfg)
         Set = function(v) current = v; btn.Text = v and v.Name or "未绑定"; self.Window.State[key] = v end,
         Get = function() return current end,
     }
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -4494,7 +4814,7 @@ function Tab:MultiSelect(cfg)
                 TextColor3 = selected[opt] and T.tabTextOn or T.ctrlText,
             }, 0.12)
             self.Window.State[key] = selected
-            if cfg.Callback then cfg.Callback(selected) end
+            if cfg.Callback then UI.safeCall(cfg.Callback, selected) end
         end)
     end
 
@@ -4505,7 +4825,7 @@ function Tab:MultiSelect(cfg)
             self.Window.State[key] = selected
         end,
     }
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 -- 人体图选部位
@@ -4696,67 +5016,55 @@ function Tab:Body2D(cfg)
 
     render()
 
-    -- ===== 展开/收起（和 Expand 完全一样）=====
-    local expandKey = "__body2d_" .. tostring(key)
-    childRow:SetAttribute("__expandKey", expandKey)
-    childRow:SetAttribute("__h", CH_HEIGHT)
-    if self.Window.State[expandKey] == nil then
-        self.Window.State[expandKey] = false
-    end
-    local expanded = self.Window.State[expandKey]
-    local expandTween = nil
-
-    local function setExpanded(open)
-        expanded = open and true or false
-        self.Window.State[expandKey] = expanded
-        self.Window._body2dLastTouched = expandKey
-
-        -- 取消上一次没跑完的收起定时器，避免和新的展开打架
-        if expandTween then
-            pcall(function() expandTween:Cancel() end)
-            expandTween = nil
-        end
-
-        if expanded then
-            childRow.Visible = true
-            childRow.Size = UDim2.new(1, -12, 0, 0)
-            expandTween = TweenService:Create(childRow,
-                TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
-                { Size = UDim2.new(1, -12, 0, CH_HEIGHT) })
-            expandTween:Play()
-        else
-            -- 收起：动画走完后隐藏，并且这次一定把它藏住
-            expandTween = TweenService:Create(childRow,
-                TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                { Size = UDim2.new(1, -12, 0, 0) })
-            expandTween:Play()
-            task.delay(0.22, function()
-                if not expanded and childRow and childRow.Parent then
-                    childRow.Visible = false
+    -- ===== 展开/收起（走统一的折叠基类）=====
+    local fold = makeFoldable(self, {
+        expandKey = "__body2d_" .. tostring(key),
+        row = row,
+        arrow = arrowBtn,
+        arrowSize = ARROW_W,
+        onState = function(open, animate, delay)
+            if open then
+                childRow.Visible = true
+                if animate then
+                    childRow.Size = UDim2.new(1, -12, 0, 0)
+                    Anim.to(childRow, { Size = UDim2.new(1, -12, 0, CH_HEIGHT) },
+                        0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay or 0)
+                else
+                    Anim.snap(childRow, { Size = UDim2.new(1, -12, 0, CH_HEIGHT) })
                 end
-            end)
-        end
+            else
+                -- 收起：动画结束后一定隐藏
+                if animate then
+                    Anim.to(childRow, { Size = UDim2.new(1, -12, 0, 0) },
+                        0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                else
+                    Anim.snap(childRow, { Size = UDim2.new(1, -12, 0, 0) })
+                end
+                -- 直接读 State 判断（不从闭包引用 fold，避免初始化顺序问题）
+                local keyRef = "__body2d_" .. tostring(key)
+                task.delay(animate and 0.22 or 0, function()
+                    if not childRow or not childRow.Parent then return end
+                    if self.Window.State[keyRef] ~= true then
+                        childRow.Visible = false
+                    end
+                end)
+            end
+        end,
+    })
 
-        Anim.to(arrowBtn, { Rotation = expanded and 180 or 0 }, 0.24,
-            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-    end
-
-    -- 暴露给外部：切 Tab 时按当前展开状态重设显隐，避免被 CDMUI 的 Visible 重置带偏
-    self._restoreBodyState = function()
-        if childRow and childRow.Parent then
-            childRow.Visible = expanded
-            childRow.Size = UDim2.new(1, -12, 0, expanded and CH_HEIGHT or 0)
-        end
-    end
+    childRow:SetAttribute("__expandKey", fold.key)
+    childRow:SetAttribute("__h", CH_HEIGHT)
 
     arrowBtn.MouseButton1Click:Connect(function()
         playClick()
-        setExpanded(not expanded)
+        fold.toggle()
     end)
     -- 整行点击也能切换（但不要在箭头重复触发）
+    -- 点击区域：从左边到箭头左侧，避免和箭头重复触发
+    local arrowW = LAYOUT.arrowSize
     local rowHit = mk("TextButton", {
         Name = "RowHit",
-        Size = UDim2.new(1, -50, 0, 52),
+        Size = UDim2.new(1, -(arrowW + 16), 0, 52),
         Position = UDim2.new(0, 0, 0, 0),
         BackgroundTransparency = 1,
         Text = "",
@@ -4765,19 +5073,11 @@ function Tab:Body2D(cfg)
     }, row)
     rowHit.MouseButton1Click:Connect(function()
         playClick()
-        setExpanded(not expanded)
+        fold.toggle()
     end)
 
     -- 初始状态：按 State 里的值恢复（默认收起）
-    if expanded then
-        childRow.Visible = true
-        childRow.Size = UDim2.new(1, -12, 0, CH_HEIGHT)
-        arrowBtn.Rotation = 180
-    else
-        childRow.Visible = false
-        childRow.Size = UDim2.new(1, -12, 0, 0)
-        arrowBtn.Rotation = 0
-    end
+    fold.setOpen(fold.isOpen(), false, 0)
 
     -- 注册到切页恢复器，保证切回来时按当前状态恢复
     table.insert(self.Window.ExpandRestorers, {
@@ -4813,7 +5113,7 @@ function Tab:Body2D(cfg)
             end
         end,
         Get = function() return selected end,
-        Expand = function(open) setExpanded(open) end,
+        Expand = function(open) fold.setOpen(open, true, 0) end,
     }
     return self.Rows[key]
 end
@@ -4978,7 +5278,7 @@ function Tab:ColorPicker(cfg)
         preview.BackgroundColor3 = c
         hueKnob.Position = UDim2.new(h, -2, 0.5, -(HUE_H + 6) / 2)
         self.Window.State[key] = c
-        if cfg.Callback then cfg.Callback(c) end
+        if cfg.Callback then UI.safeCall(cfg.Callback, c) end
     end
 
     local dragging = false
@@ -5008,7 +5308,7 @@ function Tab:ColorPicker(cfg)
         Get = function() return fromHSV(h, s, v) end,
         Set = function(c) local hh, ss, vv = toHSV(c); h, s, v = hh, ss, vv; apply() end,
     }
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -5096,7 +5396,7 @@ function Tab:Dropdown(cfg)
             btn.Text = tostring(opt)
             self.Window.State[key] = selected
             close()
-            if cfg.Callback then cfg.Callback(selected, i) end
+            if cfg.Callback then UI.safeCall(cfg.Callback, selected, i) end
         end)
     end
 
@@ -5113,7 +5413,7 @@ function Tab:Dropdown(cfg)
             self.Window.State[key] = v
         end,
     }
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -5160,14 +5460,14 @@ function Tab:TextBox(cfg)
     box.FocusLost:Connect(function()
         value = box.Text
         self.Window.State[key] = value
-        if cfg.Callback then cfg.Callback(value) end
+        if cfg.Callback then UI.safeCall(cfg.Callback, value) end
     end)
 
     local ctrl = {
         Get = function() return value end,
         Set = function(v) value = v; box.Text = tostring(v) end,
     }
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
@@ -5224,7 +5524,7 @@ function Tab:Progress(cfg)
         Set = function(v) render(v) end,
         Get = function() return fill.Size.X.Scale end,
     }
-    self.Rows[key] = ctrl
+    registerControl(self, key, ctrl)
     return ctrl
 end
 
