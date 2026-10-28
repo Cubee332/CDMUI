@@ -1,8 +1,19 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 1.9.0                                                 ║
+    ║  CDMUI 1.9.4                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
+
+    目录
+      · 快速开始
+      · UI.Create 参数
+      · Window 方法
+      · 控件清单（Tab 方法）
+      · 屏幕 HUD 浮层
+      · 连接管理
+      · 平台适配
+      · 主题定制
+      · 版本历史
 
     ┌──────────────────────────────────────────────────────────────┐
     │  快速开始                                                     │
@@ -44,7 +55,7 @@
 
         ── 状态读写 ──
         win:Get(key)                读当前值
-        win:Set(key, value)         设置值 + 重绘 + 触发 OnToggle
+        win:Set(key, value)         设置值 + 重绘 + 触发回调
         win:SetSilent(key, value)   设置值 + 重绘，不触发回调
         win:SetMany({k1=v1, k2=v2}) 批量设置
         win:RepaintAll()            把 State 全量同步到控件
@@ -57,28 +68,83 @@
         Key, Name, Desc, Default, Callback(v)
         最简单的开关，右侧勾选框。
 
-    ── tab:Expand 里的 Kind = "action" ─────────────────────────
-        点击式按钮：外观位置和勾选框一样，但没有开关状态，
-        点击只触发回调，点完自己不变。
+    ── tab:Section ─────────────────────────────────────────────
+        Name
+        分组标题，纯视觉分隔。
 
-        { Kind = "action",
-          Key  = "resetPos",
-          Name = "重置位置",
-          IconImage = "rbxassetid://112173305232811",   -- 图片图标（可选）
-          IconColor = Color3.fromRGB(220, 225, 235),    -- 图标颜色（可选）
-          Icon = "\u{27F3}",                            -- 没有图片时的文字图标
-          OnClick = function() ... end }
+    ── tab:Label ───────────────────────────────────────────────
+        Name, Desc
+        只显示文字，不可交互。
 
-        说明：
-          · IconImage 优先级高于 Icon
-          · 图标居中显示，无背景框、无边框、悬停不变色
-          · 点击时图标会短暂变暗（0.5 透明度）作为反馈
-          · 图标可从这里找：
-            https://github.com/Footagesus/Icons
-            例：lucide 图标集里 fingerprint = rbxassetid://112173305232811
+    ── tab:Divider ─────────────────────────────────────────────
+        水平分隔线，无参数。
 
-    ── 屏幕 HUD（UI.SetHUDAll / UI.SetHUD） ────────────────────
-        右下角浮层，样式仿游戏自带的夜视仪状态框
+    ── tab:Expand ──────────────────────────────────────────────
+        Key, Name, Desc, Default, Callback(v), Children
+        可展开的分组，Children 里放子控件。
+        展开/收起带高度动画。
+
+    ── tab:Expand 里的子控件 ───────────────────────────────────
+
+        Kind = "toggle"
+            Key, Name, Default, Callback(v)
+            子项开关，右侧勾选框。
+
+        Kind = "action"
+            点击式按钮：外观位置和勾选框一样，但没有开关状态，
+            点击只触发回调，点完自己不变。
+
+            { Kind = "action",
+              Key  = "resetPos",
+              Name = "重置位置",
+              IconImage = "rbxassetid://112173305232811",   -- 图片图标（可选）
+              IconColor = Color3.fromRGB(220, 225, 235),    -- 图标颜色（可选）
+              Icon = "\u{27F3}",                            -- 没有图片时的文字图标
+              OnClick = function() ... end }
+
+            说明：
+              · IconImage 优先级高于 Icon
+              · 图标居中显示，无背景框、无边框、悬停不变色
+              · 点击热区比图标大一圈（PC 30px / 手机 38px）
+              · 图标来源：https://github.com/Footagesus/Icons
+                例：lucide 的 fingerprint = rbxassetid://112173305232811
+
+        Kind = "slider"
+            Key, Name, Min, Max, Default, Step, Callback(v)
+
+        Kind = "input"
+            Key, Name, Default, Placeholder, Callback(text)
+
+        Kind = "cycle"
+            Key, Name, Options, Default, Callback(v)
+
+    ── tab:Slider ──────────────────────────────────────────────
+        Key, Name, Desc, Min, Max, Default, Step, Callback(v)
+        拖动条。手机端热区加宽到 44px。
+
+    ── tab:Input ───────────────────────────────────────────────
+        Key, Name, Desc, Default, Placeholder, Callback(text)
+
+    ── tab:Cycle ───────────────────────────────────────────────
+        Key, Name, Desc, Options, Default, Callback(v)
+
+    ── tab:ClickableRow ────────────────────────────────────────
+        Name, Desc, Callback()
+        整行可点的列表项，常用于「打开子面板」。
+
+    ── tab:RowButton ───────────────────────────────────────────
+        Name, Desc, ButtonText, Callback()
+        行内右侧带按钮。
+
+    ── tab:Body2D ──────────────────────────────────────────────
+        Name, Callback(frame)
+        给一块空白 2D 画布，自行绘制。
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  屏幕 HUD 浮层                                                │
+    └──────────────────────────────────────────────────────────────┘
+
+        屏幕角落的状态浮层，样式仿游戏自带夜视仪状态框
         （四角括号 + 白色描边字），和夜视仪同宽同层。
 
         UI.SetHUDAll(fps, ping, players)
@@ -92,191 +158,92 @@
             false = 解锁：可拖动
 
         UI.ResetHUDPosition()
-            把 HUD 挪回默认位置（左下角、夜视仪正上方）
+            把 HUD 挪回默认位置（带弹性动画）
 
         UI.DestroyHUD()
             彻底销毁
 
+        UI.GetHUDState()
+            读内部状态（调试用）
+
         特性：
-          · FPS 用真实帧采样；延迟读 Stats 的 Data Ping（不是网络抖动）
-          · 行数变化时高度带弹性动画（Back 缓动，先冲过头再回弹）
-          · 四角是 4 个固定尺寸图元，高度变化不会拉粗
+          · FPS 用真实帧采样；延迟读 Stats 的 Data Ping
+          · 位置自动跟随夜视仪框，间隙 8px
+          · 开关时播左滑 + 展开动画（Back 缓动）
+          · 四角用游戏原图 Slice，和夜视仪完全一致
 
-    ── tab:Section ─────────────────────────────────────────────
-        Name
-        分组标题，纯视觉分隔。
-
-    ── tab:Label ───────────────────────────────────────────────
-        Name, Desc
-        只显示文字，不可交互。
-
-    ── tab:Divider ─────────────────────────────────────────────
-        水平分隔线，无参数。
-
-    ── tab:Input ───────────────────────────────────────────────
-        Key, Name, Desc, Default, Min, Max, Callback(v)
-        数字输入框，失焦提交。有 Min/Max 会自动夹取值。
-
-    ── tab:Slider ──────────────────────────────────────────────
-        Key, Name, Desc, Min, Max, Default, Callback(v)
-        拖动条。
-
-    ── tab:Cycle ───────────────────────────────────────────────
-        Key, Name, Desc, Options={"A","B"}, DefaultIndex, Callback(idx, text)
-        ⚠ 回调第一个参数是【索引数字】，第二个才是文字。
-        ⚠ 默认值必须写 DefaultIndex，写 Default 无效。
-
-    ── tab:Expand ──────────────────────────────────────────────
-        Key, Name, Desc, Default, Callback(v)
-        Children = { ... }     子项列表
-        Cycle = { Key, Options, DefaultIndex, Callback(idx) }   可选右侧切换
-
-        子项 Kind 支持四种（必须显式写）：
-            { Kind = "toggle", Key="k", Name="开关", Default=false, Callback=fn }
-            { Kind = "number", Key="k", Name="数值", Min=1, Max=10, Default=5, Callback=fn }
-            { Kind = "cycle",  Key="k", Name="选项", Options={"A","B"}, DefaultIndex=1, Callback=fn }
-            { Kind = "slider", Key="k", Name="滑条", Min=0, Max=100, Default=50, Callback=fn }
-
-    ── tab:Buttons ─────────────────────────────────────────────
-        Buttons = { { Name="按钮1", Callback=fn }, ... }
-        一行并排多个按钮。
-
-    ── tab:ClickableRow ────────────────────────────────────────
-        Name, Desc, Arrow, Callback
-        整行可点击，带右箭头。
-
-    ── tab:RowButton ───────────────────────────────────────────
-        Name, Callback
-        单个按钮行。
-
-    ── tab:Dropdown ────────────────────────────────────────────
-        Key, Name, Desc, Options, Default, Callback(v)
-
-    ── tab:ColorPicker ─────────────────────────────────────────
-        Key, Name, Desc, Default, Callback(color)
-
-    ── tab:TextBox ─────────────────────────────────────────────
-        Key, Name, Desc, Default, Callback(text)
-
-    ── tab:Progress ────────────────────────────────────────────
-        Name, Value, Max
-        进度条，用 ctrl.Set(v) 更新。
-
-    ── tab:MultiSelect ─────────────────────────────────────────
-        Key, Name, Desc, Options, Default, Callback(tbl)
-
-    ── tab:Keybind ─────────────────────────────────────────────
-        Key, Name, Desc, Default, Callback(keyCode)
-
-    ── tab:Body2D ──────────────────────────────────────────────
-        Key, Name, Desc, Default, Callback(idx), Parts
-        Parts = { { Key=1, Name="头部" }, ... }
-        可折叠的人体部位选择器，默认收起，点标题行展开。
-        内部比例按 R6：头 60x60、躯干 90x90、四肢 45x90。
+        注意：首次调用要确保 UI 已建完，否则行显隐不生效。
+              建议连续调用 2-3 次或延迟 0.3 秒后再调一次。
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  控件对象（tab.Rows[key]）                                     │
+    │  连接管理                                                     │
     └──────────────────────────────────────────────────────────────┘
 
-        每个控件都登记到 tab.Rows[key]，可事后操作：
+        全库有近百处 :Connect，如果不统一管理，重载时会残留大量
+        连接，导致「重载后行为异常」这类怪 bug。
 
-            tab.Rows.k1.Set(v)        设置值（会触发 Callback）
-            tab.Rows.k1.SetSilent(v)  只更新显示，不触发 Callback
-            tab.Rows.k1.Get()         读取当前值
+        UI.AddSignal(owner, conn)
+            登记一条连接。owner 可以是任何 table（Window/Tab/控件），
+            nil 表示全局。
 
-        用途：做功能互斥时，A 打开后把 B 的勾选框刷掉。
+        UI.DisconnectAll(owner)
+            断开某个 owner 的所有连接。
+
+        UI.DisconnectEverything()
+            断开全库所有登记的连接（卸载时调用）。
+
+        UI.GetSignalStats()
+            返回 { total = 连接数, owners = owner 数 }（调试用）
+
+        Window:Destroy() 会自动调用 DisconnectAll(self)。
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  功能互斥示例                                                  │
+    │  平台适配                                                     │
     └──────────────────────────────────────────────────────────────┘
 
-        local aCtrl = tab:Toggle({ Key = "a", Name = "功能A", Callback = function(v)
-            if v and win.State.b then
-                tab.Rows.b.SetSilent(false)   -- 界面关掉
-                win.State.b = false            -- 逻辑也关掉
-            end
-        end })
+        UI.IsMobile      当前是否按手机布局渲染
+
+        强制切换（调试用）：
+            _G._CDMUIMobileOverride = true    -- 强制手机
+            _G._CDMUIMobileOverride = false   -- 强制 PC
+            _G._CDMUIMobileOverride = nil     -- 恢复自动判定
+
+        自动判定规则：
+            · 有触摸 + 没键盘 → 手机
+            · 有触摸 + 有键盘 + 屏幕很小 → 手机
+            · 否则 → PC
+
+        手机端会自动放大：
+            控件高度、字号、勾选框热区、滑块热区、HUD 尺寸
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  主题 / 尺寸自定义                                             │
+    │  主题定制                                                     │
     └──────────────────────────────────────────────────────────────┘
 
-        在 UI.Create 之前改：
+        UI.Theme                  当前主题表（可直接改字段）
+        UI.Layout                 布局尺寸表
+        UI.Size                   控件尺寸表
+        UI.LowSpecMode            低配模式（跳过装饰性描边）
+        UI.SetLowSpec(bool)       开关低配模式
 
-            UI.Theme.panel   = Color3.fromRGB(15, 15, 18)
-            UI.Theme.accent  = Color3.fromRGB(0, 170, 255)
-            UI.Layout.panelH = 600
-            UI.Size.radius   = 6
+        改主题示例：
+            UI.Theme.accent = Color3.fromRGB(120, 200, 255)
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  动画 / 错误处理（高级）                                        │
+    │  版本历史                                                     │
     └──────────────────────────────────────────────────────────────┘
 
-        UI.Anim.to(inst, props, dur, style, dir, delay)
-            补间动画。同一实例同一属性的旧动画会自动取消。
+        1.9.4   HUD 间隙 8px、字号加大；文档重写
+        1.9.3   HUD 行显隐修复（syncRow 无条件设 true）
+        1.9.2   HUD 位置动态跟随夜视仪；PC/手机双模式
+        1.9.1   统一连接管理（AddSignal/DisconnectAll）
+        1.9.0   新增 HUD 浮层与 action 控件；子项悬浮高亮
+        1.8.5   滑块热区优化、鼠标恢复修复
+        1.6.0   基础控件齐全
+]]
 
-        UI.Anim.cancel(inst)      立即取消该实例所有动画
-        UI.Anim.snap(inst, props) 立即设到终态（不走动画）
 
-        UI.safeCall(fn, ...)      安全调用（捕获错误，不中断 UI）
-        UI.GetErrorStats()        读取错误统计
-        UI.ClearErrors()          清空统计
-
-    ┌──────────────────────────────────────────────────────────────┐
-    │  重载 / 清理                                                   │
-    └──────────────────────────────────────────────────────────────┘
-
-        重复 loadstring 时会自动：
-            ① 播退出动画（面板 + 顶栏按钮淡出）
-            ② 等动画播完再建新面板
-            ③ 断开所有连接、还原鼠标 hook
-
-        手动清理：
-            if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
-
-    ╔══════════════════════════════════════════════════════════════╗
-    ║  接入新脚本必读（踩过的坑）                                     ║
-    ╚══════════════════════════════════════════════════════════════╝
-
-    ① Cycle / Expand.Cycle 的回调，第一个参数是【索引数字】。
-       写成 function(text) 会拿到数字，判断全失效。
-
-    ② Expand 的 Children 必须写 Kind 字段，支持四种：
-           toggle / cycle / number / slider
-       漏写或写错 Kind，子项会被静默忽略（不报错、不显示）。
-
-    ③ Cycle 子项的默认值必须写 DefaultIndex：
-           { Kind="cycle", ..., Options={"A","B"}, DefaultIndex=2 }
-       只写 Default 不会生效，UI 永远显示第 1 项。
-
-    ④ Body2D 默认收起，点标题行或箭头展开。
-       Callback 收到的是选中的 Key（数字）。
-
-    ⑤ 所有可点击元素的音效由 bindTap 统一播放。
-       自制按钮请用 bindTap(btn, fn)，不要直接连 MouseButton1Click。
-
-    ⑥ 外部同步界面用 SetSilent()，不会触发 Callback，避免死循环。
-       需要业务逻辑也响应时用 Set()。
-
-    ⑦ 反复重载是安全的，cleanup 会完整还原所有状态。
-
-    ⑧ 鼠标 hook 是全局单例 + 引用计数，最后一个窗口销毁时才真正卸载。
-
-    ⑨ 不要覆盖 _G._CDMUILastCleanup / _G._CDMUILiveWindows，
-       那是库的内部状态；需要清理时调 win:Destroy()。
-
-    ⑩ 控件 Key 在同一 Tab 内必须唯一，重复会打警告并覆盖。
-
-    ┌──────────────────────────────────────────────────────────────┐
-    │  手机端说明                                                    │
-    └──────────────────────────────────────────────────────────────┘
-
-        自动检测（TouchEnabled 且非 KeyboardEnabled），相关尺寸在
-        LAYOUT 里已放大：行高 88、Tab 高 62、字号 +2、滚动条 5px。
-        退出动画 0.28s（PC 0.24s）。
-
---]]
--- CDMUI v1.9.3  HUD 行显示修复（syncRow 无条件设 true + 容器查找）
+-- CDMUI v1.9.4  HUD 间隙 8px、字号加大；文档重写
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -289,7 +256,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.9.3"
+UI.Version = "1.9.4"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4017,7 +3984,7 @@ do
     local BORDER_IMG = "rbxassetid://110336735200080"
 
     -- 尺寸：完全对齐夜视仪框（184 x 84，位置 12, 849）
-    local BOX_W    = 185      -- 和夜视仪框严格同宽
+    local BOX_W    = IS_MOBILE and 210 or 195
     local BOX_X   = 12
     -- 夜视仪框：顶部 y=849，高 84，底边距屏幕底 76px
     -- HUD 挂在它正上方，留 8px 间隙
@@ -4056,16 +4023,17 @@ do
         return math.floor(vh * 0.841)
     end
 
-    local BOX_TOP_Y = getNvgTopY()   -- HUD 底边贴着这个 Y 往上 6px
+    local HUD_GAP  = 8                       -- HUD 底边与夜视仪顶部的间隙
+    local BOX_TOP_Y = getNvgTopY() - HUD_GAP  -- HUD 底边停在这里
     local PAD_X    = IS_MOBILE and 16 or 14
     local PAD_Y    = IS_MOBILE and 10 or 8
-    local ROW_H    = IS_MOBILE and 26 or 20
+    local ROW_H    = IS_MOBILE and 28 or 23
     local ROW_GAP  = IS_MOBILE and 5 or 4
-    local FONT_SZ  = IS_MOBILE and 19 or 15
-    local LABEL_SZ = IS_MOBILE and 17 or 16
+    local FONT_SZ  = IS_MOBILE and 22 or 18
+    local LABEL_SZ = IS_MOBILE and 20 or 17
     local BTN_W    = IS_MOBILE and 66 or 58
     local BTN_H    = IS_MOBILE and 22 or 18
-    local LABEL_W  = IS_MOBILE and 52 or 44
+    local LABEL_W  = IS_MOBILE and 56 or 48
     local BTN_FSZ  = IS_MOBILE and 15 or 13
 
     local frameCount, fpsWindow, curFPS = 0, 0, 0
@@ -4290,7 +4258,7 @@ do
                 local ins = game:GetService("GuiService"):GetGuiInset()
                 if typeof(ins) == "Vector2" then insetY = ins.Y end
             end)
-            local topY = getNvgTopY() - 84 - 6 + insetY
+            local topY = getNvgTopY() - HUD_GAP - 84 + insetY
             hudFrame.Position = UDim2.new(0, BOX_X, 0, math.max(0, topY))
         end
         hudFrame.BackgroundTransparency = 1
