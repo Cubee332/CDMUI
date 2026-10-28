@@ -3,7 +3,7 @@
 Roblox 控制面板 UI 库。单文件，无依赖，PC / 手机自适应。
 
 ```
-CDMUI 2.0.0
+CDMUI 2.1.0
 ```
 
 ---
@@ -44,6 +44,9 @@ CDMUI 2.0.0
 - [错误处理](#错误处理)
 - [通知与对话框](#通知与对话框)
 - [卡片](#卡片)
+- [依赖系统](#依赖系统)
+- [配置存储](#配置存储)
+- [Tooltip](#tooltip)
 - [搜索](#搜索)
 - [常见问题](#常见问题)
 - [版本历史](#版本历史)
@@ -859,6 +862,78 @@ local card = win:Card({
 
 ---
 
+## 依赖系统
+
+子控件可以依赖某个开关：开关关掉时自动隐藏。这是 Linoria / Obsidian 的核心特性。
+
+```lua
+-- 先建主开关
+tab:Toggle({ Key = "aimbot", Name = "自瞄" })
+
+-- 建子控件
+local rangeRow = tab:Slider({ Key = "aimRange", Name = "范围", Min = 10, Max = 500 })
+local smoothRow = tab:Slider({ Key = "aimSmooth", Name = "平滑", Min = 1, Max = 100 })
+
+-- 绑定依赖：aimbot 关掉时，这两行自动隐藏
+win:AddDependency("aimbot", { rangeRow.Frame, smoothRow.Frame })
+```
+
+### 特性
+
+- 主开关变化时自动显隐
+- `Set` / `SetSilent` 都会触发
+- 支持传单个 Frame 或 Frame 数组
+- 切页后状态保持
+
+---
+
+## 配置存储
+
+把 State 序列化存文件，下次进游戏自动恢复。
+
+```lua
+-- 保存
+win:SaveConfig("myconfig")
+
+-- 加载
+win:LoadConfig("myconfig")
+```
+
+### 说明
+
+- 存储路径：`CDMUI/myconfig.json`
+- 只序列化基础类型（bool / number / string / table）
+- 跳过 Color3、Enum 等不可序列化的值
+- 依赖执行器支持 `writefile` / `readfile` / `isfile` / `makefolder`
+
+### 配合依赖系统
+
+```lua
+-- 加载后依赖状态也会同步刷新
+win:LoadConfig("myconfig")
+```
+
+---
+
+## Tooltip
+
+给任意控件加悬浮提示。
+
+```lua
+local btn = tab:RowButton({ Name = "重置", ButtonText = "执行" })
+UI.Tooltip(btn.Frame, "点击后恢复所有默认设置", { Width = 220 })
+```
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `target` | Instance | 触发提示的控件 |
+| `text` | string | 提示内容 |
+| `opts.Width` | number | 提示框宽度（默认 200）|
+
+返回 `{ Show(), Hide() }` 可手动控制。
+
+---
+
 ## 搜索
 
 给顶栏加搜索框，实时过滤当前 Tab 的行。
@@ -913,6 +988,7 @@ end
 
 | 版本 | 变更 |
 |---|---|
+| 2.1.0 | 新增依赖系统 / 配置存储 / Tooltip（对齐主流 UI 库）|
 | 2.0.0 | 完善预设体系：清理重复定义，新增 Custom/Paragraph/Space/Card，导出 Layout |
 | 1.9.7 | 移除 Body2D（游戏专属）；文档更新 |
 | 1.9.6 | 移除 HUD（改为独立模块）；新增 Dropdown / Keybind / Notify / Dialog / Search |
