@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.3.0                                                 ║
+    ║  CDMUI 2.3.1                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.3.0  加载动画支持真实任务（RealLoading + Tasks）
+-- CDMUI v2.3.1  描述文字支持自动换行（最多 3 行）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.3.0"
+UI.Version = "2.3.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -5347,21 +5347,73 @@ local function addDesc(row, data, y)
         layoutRowText(row)
         return
     end
+
+    -- 估算需要几行：中文按 1.0 宽、ASCII 按 0.55 宽，粗略算
+    local availW = row.AbsoluteSize.X > 0 and (row.AbsoluteSize.X - 80)
+                   or (LAYOUT.panelW - 80)
+    local unitW = LAYOUT.rowDesc * 0.58
+    local textW = 0
+    for _, cp in utf8.codes(tostring(desc)) do
+        -- 中日韩字符宽度算 1，其他算 0.55
+        if cp >= 0x2E80 then textW = textW + unitW * 1.7
+        else textW = textW + unitW * 0.55 end
+    end
+    local linesN = math.max(1, math.ceil(textW / math.max(60, availW)))
+    linesN = math.min(linesN, 3)      -- 最多 3 行
+
+    -- 单行：保持原样（垂直居中在标题下方）
+    if linesN <= 1 then
+        mk("TextLabel", {
+            Name = "Desc",
+            Size = UDim2.new(1, -80, 0, 22),
+            Position = UDim2.new(0, 12, 0.5, 6),
+            BackgroundTransparency = 1,
+            Text = desc,
+            TextColor3 = T.textDim,
+            Font = FONT,
+            TextSize = LAYOUT.rowDesc,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Center,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = 5,
+            Active = false,
+        }, row)
+        layoutRowText(row)
+        return
+    end
+
+    -- 多行：换行 + 顶部对齐，行高相应加高
+    local lineH = math.floor(LAYOUT.rowDesc * 1.35)
+    local descH = lineH * linesN
+    local extra = descH - 22
+
+    -- 行本身加高
+    local baseH = ROW_H
+    row.Size = UDim2.new(1, -12, 0, baseH + extra)
+
     mk("TextLabel", {
         Name = "Desc",
-        Size = UDim2.new(1, -80, 0, 22),
-        Position = UDim2.new(0, 12, 0.5, 6),
+        Size = UDim2.new(1, -80, 0, descH),
+        Position = UDim2.new(0, 12, 0, 36),
         BackgroundTransparency = 1,
         Text = desc,
         TextColor3 = T.textDim,
         Font = FONT,
         TextSize = LAYOUT.rowDesc,
+        TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Top,
         ZIndex = 5,
         Active = false,
     }, row)
-    layoutRowText(row)
+
+    -- 标题上移一点，给描述腾地方
+    local title = row:FindFirstChild("Title")
+    if title then
+        title.Position = UDim2.new(0, 12, 0, 8)
+        title.Size = UDim2.new(1, -80, 0, 24)
+        title.TextYAlignment = Enum.TextYAlignment.Top
+    end
 end
 
 function Tab:Toggle(cfg)
