@@ -21,6 +21,7 @@ Roblox / Luau 单文件控制面板 UI 库。零依赖，`loadstring` 直载。
 - [使用场景](#使用场景)
 - [移动端适配](#移动端适配)
 - [主题与自定义](#主题与自定义)
+- [**接入新脚本必读**](#接入新脚本必读)
 - [常见问题](#常见问题)
 - [调试与故障排查](#调试与故障排查)
 
@@ -780,6 +781,96 @@ Anim.hover(frame, fromColor, toColor)
 -- 按钮按压
 Anim.press(button, 0.95)
 ```
+
+---
+
+## 接入新脚本必读
+
+这 10 条都是实际踩过的坑，能避免 90% 的集成问题。
+
+### ① Cycle 回调第一个参数是索引
+
+```lua
+-- 正确
+tab:Cycle({ ..., Callback = function(idx, text) end })
+
+-- 错误：text 收到的是数字
+tab:Cycle({ ..., Callback = function(text) end })
+```
+
+### ② Expand 子项必须写 Kind
+
+```lua
+-- 正确
+Children = {
+    { Kind = "toggle", Key = "c1", Name = "开关", Callback = fn },
+}
+
+-- 错误：不写 Kind 会被静默忽略（不报错、不显示）
+Children = {
+    { Key = "c1", Name = "开关", Callback = fn },
+}
+```
+
+支持的 Kind：`toggle` / `cycle` / `number` / `slider`
+
+### ③ Cycle 子项默认值用 DefaultIndex
+
+```lua
+-- 正确
+{ Kind = "cycle", Options = {"A","B"}, DefaultIndex = 2 }
+
+-- 错误：Default 无效，UI 永远显示第 1 项
+{ Kind = "cycle", Options = {"A","B"}, Default = 2 }
+```
+
+### ④ Body2D 默认收起
+
+点标题行或箭头展开。`Callback` 收到的是选中的 Key（数字）。
+
+### ⑤ 自制按钮用 bindTap
+
+```lua
+-- 正确：有点击音效
+bindTap(btn, function() ... end)
+
+-- 错误：没有音效
+btn.MouseButton1Click:Connect(function() ... end)
+```
+
+### ⑥ 外部同步用 SetSilent
+
+```lua
+-- 正确：只更新界面，不触发 Callback，不会死循环
+win:SetSilent("key", value)
+
+-- 注意：会触发 OnToggle，可能引起递归
+win:Set("key", value)
+```
+
+### ⑦ 反复重载是安全的
+
+`cleanup` 会断开连接、播退出动画、延迟销毁，并还原所有临时钩子。
+
+### ⑧ 鼠标 hook 是全局单例
+
+采用引用计数，最后一个窗口销毁时才真正卸载 `__newindex`。
+
+### ⑨ 不要覆盖内部状态
+
+```lua
+-- 不要动这些
+_G._CDMUILastCleanup
+_G._CDMUILiveWindows
+_G._CDMUIRunGen
+
+-- 需要清理时用
+win:Destroy()
+```
+
+### ⑩ Key 在同一 Tab 内必须唯一
+
+重复会打警告并覆盖前一个。不同 Tab 之间可以同名。
 
 ---
 
