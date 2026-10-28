@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.1.2                                                 ║
+    ║  CDMUI 2.2.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -228,7 +228,7 @@
 
 
 
--- CDMUI v2.1.2  导出 UI.PlayClick，自定义控件可用同一套音效
+-- CDMUI v2.2.0  Tab 悬停高亮接入刷新系统；导出入场状态 API
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -241,7 +241,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.1.2"
+UI.Version = "2.2.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2709,11 +2709,15 @@ function UI.Create(opts)
                 local diff = tabWheelTarget - cur
                 if math.abs(diff) < 0.4 then
                     bar.CanvasPosition = Vector2.new(tabWheelTarget, 0)
+                    -- 停稳后补一次悬停刷新
+                    pcall(refreshHover, bar)
                     stopTabWheelSmooth()
                     return
                 end
 
                 bar.CanvasPosition = Vector2.new(cur + diff * TAB_WHEEL_EASE, 0)
+                -- 滚动中鼠标位置不变，手动补悬停检测
+                pcall(refreshHover, bar)
             end)
         end
 
@@ -2924,7 +2928,23 @@ end
 --   不再从 BackgroundTransparency = 1 起步（那会让面板变透明、游戏画面透出来）
 --   改用「缩放 + 位移 + 轻微淡化」，底色始终存在，观感干净
 -- 首次运行的加载 + 欢迎动画
+-- 入场动画是否还在播放（外部可以等这个变 false 再启动自己的东西）
+function Window:IsIntroPlaying()
+    return self._introPlaying == true
+end
+
+-- 等入场动画结束（带超时保护）
+function Window:WaitForIntro(timeout)
+    timeout = timeout or 5
+    local t0 = os.clock()
+    while self._introPlaying and (os.clock() - t0) < timeout do
+        task.wait(0.05)
+    end
+    return not self._introPlaying
+end
+
 function Window:_PlayIntro()
+    self._introPlaying = true
     -- 被新的运行取代了就别再播动画
     if UI.IsStale() or self.Destroyed then return end
 
@@ -3366,6 +3386,7 @@ function Window:_PlayIntro()
                             pcall(function() rows[i]:SetAttribute("__introBusy", false) end)
                         end
                     end
+                    self._introPlaying = false
                 end)
             end)
 
@@ -4179,21 +4200,31 @@ function Window:Tab(name)
 
     tab.Button = btn
 
-    btn.MouseEnter:Connect(function()
-        -- 手机端不做悬停高亮
+    -- Tab 悬停高亮：和内容行用同一套刷新机制
+    --   之前只绑 MouseEnter/Leave，Tab 栏滚动或布局变化时
+    --   鼠标没动就不会重发事件，高亮会停留在旧状态
+    local function tabEnter()
         if IS_MOBILE then return end
-        -- 入场动画期间不响应悬停，避免提前亮起
         if self._tabAnimating then return end
         if self.TabIndex ~= tabIndex then
             tween(btn, 0.12, { BackgroundColor3 = T.rowHover })
         end
-    end)
-    btn.MouseLeave:Connect(function()
+    end
+    local function tabLeave()
         if self._tabAnimating then return end
         if self.TabIndex ~= tabIndex then
             tween(btn, 0.12, { BackgroundColor3 = T.tabIdle })
         end
-    end)
+    end
+
+    btn.MouseEnter:Connect(tabEnter)
+    btn.MouseLeave:Connect(tabLeave)
+
+    -- 注册到全局悬停刷新系统
+    btn:SetAttribute("__hoverEnter", true)
+    btn:SetAttribute("__hoverActive", false)
+    _G.__CDMUIHoverFns = _G.__CDMUIHoverFns or {}
+    _G.__CDMUIHoverFns[btn] = { enter = tabEnter, leave = tabLeave }
     -- Tab 点击统一由 Tab 栏的 onEnd 处理（见下方 Tab 栏拖动逻辑）
     --   不再用 Activated：ScrollingFrame 会吞掉它，而且拖动时也会误触发
     --   保留一个空连接占位，方便外部调试时能找到
@@ -4355,7 +4386,12 @@ function Window:_TweenTabScroll(target, onDone)
             pcall(function()
                 bar.CanvasPosition = Vector2.new(from + (target - from) * a, 0)
             end)
+            -- Tab 栏滚动时鼠标物理位置不变，Roblox 不会重发 MouseEnter，
+            -- 必须手动补一次悬停检测（和内容区滚动同样的处理）
+            pcall(refreshHover, bar)
             if a >= 1 then
+                -- 停稳后再补一次，确保最终状态正确
+                pcall(refreshHover, bar)
                 if onDone then task.defer(onDone) end
                 return
             end
