@@ -3,7 +3,7 @@
 Roblox 控制面板 UI 库。单文件，无依赖，PC / 手机自适应。
 
 ```
-CDMUI 1.9.7
+CDMUI 2.0.0
 ```
 
 ---
@@ -27,6 +27,14 @@ CDMUI 1.9.7
   - [ClickableRow 可点行](#clickablerow-可点行)
   - [RowButton 行内按钮](#rowbutton-行内按钮)
   - [Dropdown 下拉选择](#dropdown-下拉选择)
+  - [MultiSelect 多选](#multiselect-多选)
+  - [ColorPicker 取色器](#colorpicker-取色器)
+  - [TextBox 文本框](#textbox-文本框)
+  - [Progress 进度条](#progress-进度条)
+  - [Buttons 按钮组](#buttons-按钮组)
+  - [Paragraph 段落](#paragraph-段落)
+  - [Space 间隔](#space-间隔)
+  - [Custom 自定义行](#custom-自定义行)
   - [Keybind 按键绑定](#keybind-按键绑定)
 - [子控件（Expand 内部）](#子控件expand-内部)
 - [连接管理](#连接管理)
@@ -35,6 +43,7 @@ CDMUI 1.9.7
 - [性能选项](#性能选项)
 - [错误处理](#错误处理)
 - [通知与对话框](#通知与对话框)
+- [卡片](#卡片)
 - [搜索](#搜索)
 - [常见问题](#常见问题)
 - [版本历史](#版本历史)
@@ -407,6 +416,154 @@ tab:Keybind({
 })
 ```
 
+### MultiSelect 多选
+
+一组小按钮，可同时选中多个。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Key` | string | 状态键名 |
+| `Name` | string | 显示名 |
+| `Desc` | string | 副标题 |
+| `Options` | table | 选项数组 |
+| `Default` | table | 默认选中的项 |
+| `Callback` | function(list) | 变化时调用 |
+
+```lua
+tab:MultiSelect({
+    Key = "features",
+    Name = "功能",
+    Options = { "透视", "自瞄", "加速" },
+    Default = { "透视" },
+    Callback = function(list)
+        for _, v in ipairs(list) do print(v) end
+    end,
+})
+```
+
+### ColorPicker 取色器
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Key` | string | 状态键名 |
+| `Name` | string | 显示名 |
+| `Desc` | string | 副标题 |
+| `Default` | Color3 | 默认颜色 |
+| `Callback` | function(color) | 变化时调用 |
+
+```lua
+tab:ColorPicker({
+    Key = "espColor",
+    Name = "透视颜色",
+    Default = Color3.fromRGB(255, 80, 80),
+    Callback = function(c) print(c) end,
+})
+```
+
+### TextBox 文本框
+
+多行文本输入，适合粘贴长内容。
+
+```lua
+tab:TextBox({
+    Key = "notes",
+    Name = "备注",
+    Placeholder = "输入多行文本...",
+    Callback = function(text) end,
+})
+```
+
+### Progress 进度条
+
+只读进度显示。
+
+```lua
+local bar = tab:Progress({
+    Key = "loadProgress",
+    Name = "加载进度",
+    Max = 100,
+    Value = 0,
+})
+bar.Set(45)
+```
+
+### Buttons 按钮组
+
+一行里放多个按钮。
+
+```lua
+tab:Buttons({
+    Name = "快捷操作",
+    Buttons = {
+        { Text = "保存", Callback = function() end },
+        { Text = "重置", Callback = function() end },
+    },
+})
+```
+
+### Paragraph 段落
+
+多行文字块，适合放说明。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Name` | string | 标题（可选）|
+| `Text` | string | 正文 |
+| `Height` | number | 高度（不填自动算）|
+
+```lua
+tab:Paragraph({
+    Name = "使用说明",
+    Text = "第一行\n第二行\n第三行",
+})
+```
+
+### Space 间隔
+
+纯间距，用于分组留白。
+
+```lua
+tab:Space(16)          -- 16px 间隔
+tab:Space({ Height = 24 })
+```
+
+### Custom 自定义行
+
+用库的标准行样式（标题/描述/圆角/悬浮/箭头），内容区自己画。这是给非标准控件用的入口。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Key` | string | 状态键名 |
+| `Name` | string | 显示名 |
+| `Desc` | string | 副标题 |
+| `Height` | number | 展开后内容区高度 |
+| `Arrow` | bool | 是否显示箭头（默认 true）|
+| `Builder` | function(inner, ctx) | 绘制内容 |
+
+```lua
+local ctrl = tab:Custom({
+    Key = "myWidget",
+    Name = "自定义控件",
+    Desc = "点击箭头展开",
+    Height = 200,
+    Builder = function(inner, ctx)
+        -- inner 是一块空白 Frame，在里面自由绘制
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundTransparency = 1
+        label.Text = "自定义内容"
+        label.TextColor3 = CD.Theme.text
+        label.Parent = inner
+    end,
+})
+
+ctrl.Expand(true)      -- 展开
+ctrl.Set(true)         -- 展开（不播动画）
+ctrl.Get()             -- 读状态
+ctrl.Inner             -- 内容容器
+ctrl.Child             -- 子容器（含背景/竖条）
+```
+
 ---
 
 ## 子控件（Expand 内部）
@@ -676,6 +833,32 @@ UI.Dialog({
 
 ---
 
+## 卡片
+
+### Window:Card 独立卡片
+
+浮在面板上的独立卡片，不属于任何 Tab。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Title` | string | 标题 |
+| `Text` | string | 正文 |
+| `Width` | number | 宽（默认 280）|
+| `Height` | number | 高（默认 140）|
+| `Position` | UDim2 | 位置 |
+| `Closable` | bool | 是否显示关闭按钮（默认 true）|
+
+```lua
+local card = win:Card({
+    Title = "提示",
+    Text = "这是一张独立卡片",
+    Width = 300,
+    Height = 160,
+})
+```
+
+---
+
 ## 搜索
 
 给顶栏加搜索框，实时过滤当前 Tab 的行。
@@ -730,6 +913,7 @@ end
 
 | 版本 | 变更 |
 |---|---|
+| 2.0.0 | 完善预设体系：清理重复定义，新增 Custom/Paragraph/Space/Card，导出 Layout |
 | 1.9.7 | 移除 Body2D（游戏专属）；文档更新 |
 | 1.9.6 | 移除 HUD（改为独立模块）；新增 Dropdown / Keybind / Notify / Dialog / Search |
 | 1.9.5 | HUD 行高修正（总高精确等于框高）|
