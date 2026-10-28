@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.8.0  手机适配完善（触摸阈值、滚动条、禁用悬停、Tab栏加高）
+-- CDMUI v1.8.1  滚轮改为平滑趋近（目标位置+每帧插值），消除卡顿
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.8.0"
+UI.Version = "1.8.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -866,6 +866,7 @@ local function attachInertia(frame, opts)
     local conn = nil
     local destroyed = false
     local forceFriction = 0.92     -- 本次滑行的摩擦（由力度决定）
+    local stopWheelSmoothRef = nil -- 前向引用：拖动时要停掉滚轮平滑
 
     local function canvasOf()
         return isX and frame.CanvasPosition.X or frame.CanvasPosition.Y
@@ -991,7 +992,18 @@ local function attachInertia(frame, opts)
         local hit = inside or tgt
         if not hit then return end
 
+        -- 停掉自己 + 其它区域还在跑的惯性
+        --   （拖内容区时 Tab 栏不该继续滑）
+        local stoppers = _G.__CDMUIInertiaStoppers
+        if stoppers then
+            for tgt, fn in pairs(stoppers) do
+                if tgt ~= frame then pcall(fn) end
+            end
+        end
+        if _G.__TabWheelStopRef then pcall(_G.__TabWheelStopRef) end
+
         stopInertia()
+        if stopWheelSmoothRef then stopWheelSmoothRef() end
         dragging = true
         startPos = pos or Vector2.new(0, 0)
         startCanvas = canvasOf()
@@ -1073,53 +1085,76 @@ local function attachInertia(frame, opts)
         end
     end)
 
-    -- 滚轮：立刻位移 + 轻微惯性
-    --   关键：连续快速滚动时不要叠加加速，否则会「瞬移」
-    --   做法是每格只注入固定的小速度，并限制总速度上限
-    local WHEEL_STEP  = IS_MOBILE and 30 or 40   -- 每格立刻位移
-    local WHEEL_SPEED = 8           -- 每格额外注入的惯性
-    local WHEEL_MAX   = 20          -- 惯性速度上限
-    local lastWheel = 0
+    -- ============================================================
+    -- 滚轮滚动
+    --   之前的做法是「每格立刻跳 40px」，一格格跳所以看着卡。
+    --   现在改成「累积目标位置 + 每帧平滑趋近」，和拖动一样顺。
+    --     · 每格滚轮把 target 推远 55px
+    --     · 每帧把当前值向 target 靠拢（指数插值，快但不突兀）
+    --     · 手松开后 target 不再变化，自然停住
+    -- ============================================================
+    local WHEEL_STEP = IS_MOBILE and 45 or 55     -- 每格推进距离
+    local WHEEL_EASE = 0.32                        -- 每帧趋近比例（越大越快）
+    local wheelTarget = nil
+    local wheelConn = nil
+
+    local function stopWheelSmooth()
+        if wheelConn then
+            pcall(function() wheelConn:Disconnect() end)
+            wheelConn = nil
+        end
+        wheelTarget = nil
+    end
+    stopWheelSmoothRef = stopWheelSmooth
+
+    local function wheelMax()
+        return isX
+            and math.max(0, frame.AbsoluteCanvasSize.X - frame.AbsoluteSize.X)
+            or  math.max(0, frame.AbsoluteCanvasSize.Y - frame.AbsoluteSize.Y)
+    end
+
+    local function startWheelSmooth()
+        if wheelConn then return end
+        wheelConn = RunService.RenderStepped:Connect(function()
+            if destroyed or not frame or not frame.Parent or not wheelTarget then
+                stopWheelSmooth()
+                return
+            end
+
+            local cur = canvasOf()
+            local diff = wheelTarget - cur
+            -- 足够接近就停
+            if math.abs(diff) < 0.4 then
+                setCanvas(wheelTarget)
+                stopWheelSmooth()
+                return
+            end
+
+            -- 指数趋近：每帧走剩余距离的 32%
+            setCanvas(cur + diff * WHEEL_EASE)
+
+            if opts.onScroll then UI.safeCall(opts.onScroll) end
+        end)
+    end
+
     frame.InputChanged:Connect(function(input)
         if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
 
         local dz = input.Position.Z
         if dz == 0 then return end
 
-        local now = os.clock()
-        local cur = canvasOf()
-        local maxV = isX
-            and math.max(0, frame.AbsoluteCanvasSize.X - frame.AbsoluteSize.X)
-            or  math.max(0, frame.AbsoluteCanvasSize.Y - frame.AbsoluteSize.Y)
+        -- 停止拖动惯性，改用平滑趋近
+        stopInertia()
 
-        -- ① 立刻位移（跟手，这是主要位移）
-        local immediate = -dz * WHEEL_STEP
-        local afterImmediate = setCanvas(cur + immediate)
+        local maxV = wheelMax()
+        local base = wheelTarget or canvasOf()
+        wheelTarget = math.clamp(base - dz * WHEEL_STEP, 0, maxV)
 
-        -- ② 轻微惯性：连续滚动时不累加，直接用固定值
-        --    （之前用 velocity - dz*... 累加，快速滚动会越滚越快导致瞬移）
-        local boosted = -dz * WHEEL_SPEED
-        if now - lastWheel < 0.10 then
-            -- 连续滚动：只保留方向，不叠加幅度
-            if (velocity > 0) ~= (boosted > 0) then
-                boosted = boosted * 1.0
-            else
-                boosted = math.clamp(velocity + boosted, -WHEEL_MAX, WHEEL_MAX)
-            end
-        end
-        lastWheel = now
-
-        -- 撞边界：不给惯性
-        if (afterImmediate <= 0 and boosted < 0) or (afterImmediate >= maxV and boosted > 0) then
-            velocity = 0
-            stopInertia()
-            return
-        end
-
-        velocity = math.clamp(boosted, -WHEEL_MAX, WHEEL_MAX)
-        forceFriction = 0.91
-        startInertia()
+        startWheelSmooth()
     end)
+
+    -- 拖动手感优先：开始拖动时停掉滚轮平滑
+    --   （在 InputBegan 里已经 stopInertia，这里补一句）
 
     -- 登记到全局，别的区域开始拖动时能停掉我
     _G.__CDMUIInertiaStoppers = _G.__CDMUIInertiaStoppers or {}
@@ -1129,6 +1164,7 @@ local function attachInertia(frame, opts)
         Destroy = function()
             destroyed = true
             stopInertia()
+            if stopWheelSmoothRef then stopWheelSmoothRef() end
             if _G.__CDMUIInertiaStoppers then
                 _G.__CDMUIInertiaStoppers[frame] = nil
             end
@@ -2361,6 +2397,7 @@ function UI.Create(opts)
                 end
             end
             stopInertia()
+            if _G.__TabWheelStopRef then pcall(_G.__TabWheelStopRef) end
             dragging = true
             dragMoved = false
             dragStarted = false
@@ -2497,38 +2534,66 @@ function UI.Create(opts)
         table.insert(self.Connections, UserInputService.InputChanged:Connect(onMove))
         table.insert(self.Connections, UserInputService.InputEnded:Connect(onEnd))
 
-        -- Tab 栏滚轮：立刻位移 + 惯性滑行
+        -- ============================================================
+        -- Tab 栏滚轮：累积目标 + 每帧平滑趋近（和内容区一致）
+        --   旧做法是每格立刻跳 60px，一格格跳所以卡
+        -- ============================================================
+        local TAB_WHEEL_STEP = IS_MOBILE and 50 or 62
+        local TAB_WHEEL_EASE = 0.32
+        local tabWheelTarget = nil
+        local tabWheelConn = nil
+
+        local function stopTabWheelSmooth()
+            if tabWheelConn then
+                pcall(function() tabWheelConn:Disconnect() end)
+                tabWheelConn = nil
+            end
+            tabWheelTarget = nil
+        end
+        _G.__TabWheelStopRef = stopTabWheelSmooth
+
+        local function tabMaxX()
+            local sc3 = (self.Scale and self.Scale.Scale) or 1
+            if sc3 <= 0 then sc3 = 1 end
+            return math.max(0, bar.CanvasSize.X.Offset * sc3 - bar.AbsoluteSize.X)
+        end
+
+        local function startTabWheelSmooth()
+            if tabWheelConn then return end
+            tabWheelConn = RunService.RenderStepped:Connect(function()
+                if not bar or not bar.Parent or not tabWheelTarget then
+                    stopTabWheelSmooth()
+                    return
+                end
+
+                local cur = bar.CanvasPosition.X
+                local diff = tabWheelTarget - cur
+                if math.abs(diff) < 0.4 then
+                    bar.CanvasPosition = Vector2.new(tabWheelTarget, 0)
+                    stopTabWheelSmooth()
+                    return
+                end
+
+                bar.CanvasPosition = Vector2.new(cur + diff * TAB_WHEEL_EASE, 0)
+            end)
+        end
+
         table.insert(self.Connections, UserInputService.InputChanged:Connect(function(input)
             if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
             local pos = posOf2(input)
-            if not pos then
-                local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-                if ok and typeof(loc) == "Vector2" then pos = loc end
-            end
             if not pos or not inBar(pos.X, pos.Y) then return end
 
             local dz = input.Position.Z
             if dz == 0 then return end
 
-            local sc3 = (self.Scale and self.Scale.Scale) or 1
-            if sc3 <= 0 then sc3 = 1 end
-            local maxX3 = math.max(0, bar.CanvasSize.X.Offset * sc3 - bar.AbsoluteSize.X)
+            -- 停掉拖动惯性，改平滑趋近
+            stopInertia()
 
-            -- ① 立刻位移
-            local immediate = -dz * 60
-            local cur3 = bar.CanvasPosition.X
-            local after3 = math.clamp(cur3 + immediate, 0, maxX3)
-            bar.CanvasPosition = Vector2.new(after3, 0)
+            local maxX3 = tabMaxX()
+            local base = tabWheelTarget or bar.CanvasPosition.X
+            tabWheelTarget = math.clamp(base - dz * TAB_WHEEL_STEP, 0, maxX3)
 
-            -- ② 惯性
-            local boosted = -dz * 20
-            if (after3 <= 0 and boosted < 0) or (after3 >= maxX3 and boosted > 0) then
-                stopInertia()
-                return
-            end
-            inertiaVel = boosted
-            inertiaFriction = 0.92
-            startInertia()
+            startTabWheelSmooth()
         end))
     end
 
