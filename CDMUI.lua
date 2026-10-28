@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.8.2  修复卸载时鼠标不恢复（final 参数+强制卸 hook）；修复悬浮刷新递归爆栈
+-- CDMUI v1.8.3  滑动条修复（拖动静音、手机热区44px、值不变不重绘）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.8.2"
+UI.Version = "1.8.3"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -736,6 +736,20 @@ local function bindTap(btn, fn)
     local startPos = nil
     local started = false
 
+    -- 按下时标记「正在操作控件」，内容区就别滚了
+    btn.InputBegan:Connect(function(input)
+        local ut = input.UserInputType
+        if ut == Enum.UserInputType.Touch or ut == Enum.UserInputType.MouseButton1 then
+            _G.__CDMUIControlDragging = true
+        end
+    end)
+    btn.InputEnded:Connect(function(input)
+        local ut = input.UserInputType
+        if ut == Enum.UserInputType.Touch or ut == Enum.UserInputType.MouseButton1 then
+            _G.__CDMUIControlDragging = false
+        end
+    end)
+
     local function posOf(input)
         local ok, p = pcall(function() return input.Position end)
         if ok and typeof(p) == "Vector2" then return p end
@@ -975,6 +989,9 @@ local function attachInertia(frame, opts)
             return
         end
 
+
+        -- 正在拖滑动条 / 操作其它控件：内容区不要抢
+        if _G.__CDMUISliderDragging or _G.__CDMUIControlDragging then return end
 
         local pos = posOf(input)
 
@@ -5081,14 +5098,15 @@ function Tab:Expand(cfg)
                 BackgroundTransparency = 1,
             }, ch)
 
+            local trackH = IS_MOBILE and 8 or 6
             local track = mk("Frame", {
-                Size = UDim2.new(0, SW, 0, 6),
-                Position = UDim2.new(0, 0, 0.5, -3),
+                Size = UDim2.new(0, SW, 0, trackH),
+                Position = UDim2.new(0, 0, 0.5, -trackH / 2),
                 BackgroundColor3 = T.ctrl,
                 BorderSizePixel = 0,
                 ZIndex = 6,
             }, sh)
-            corner(track, 3)
+            corner(track, trackH / 2)
 
             local fill = mk("Frame", {
                 Size = UDim2.new(0, 0, 1, 0),
@@ -5098,14 +5116,15 @@ function Tab:Expand(cfg)
             }, track)
             corner(fill, 3)
 
+            local knobSize = IS_MOBILE and 18 or 12
             local knob = mk("Frame", {
-                Size = UDim2.fromOffset(12, 12),
-                Position = UDim2.new(0, -6, 0.5, -6),
+                Size = UDim2.fromOffset(knobSize, knobSize),
+                Position = UDim2.new(0, -knobSize / 2, 0.5, -knobSize / 2),
                 BackgroundColor3 = Color3.fromRGB(245, 247, 251),
                 BorderSizePixel = 0,
                 ZIndex = 8,
             }, track)
-            corner(knob, 6)
+            corner(knob, knobSize / 2)
 
             local vlab = mk("TextLabel", {
                 Size = UDim2.fromOffset(40, 18),
@@ -5128,13 +5147,15 @@ function Tab:Expand(cfg)
                 local a = (mx > mn) and ((val - mn) / (mx - mn)) or 0
                 a = math.clamp(a, 0, 1)
                 fill.Size = UDim2.new(a, 0, 1, 0)
-                knob.Position = UDim2.new(a, -6, 0.5, -6)
+                knob.Position = UDim2.new(a, -knobSize / 2, 0.5, -knobSize / 2)
                 vlab.Text = string.format("%.2f", val)
             end
 
+            -- 触摸热区：手机端加高到 40px，手指更好按
+            local hitH = IS_MOBILE and 40 or 24
             local hit = mk("TextButton", {
-                Size = UDim2.new(0, SW, 0, 24),
-                Position = UDim2.new(0, 0, 0.5, -12),
+                Size = UDim2.new(0, SW, 0, hitH),
+                Position = UDim2.new(0, 0, 0.5, -hitH / 2),
                 BackgroundTransparency = 1,
                 Text = "",
                 AutoButtonColor = false,
@@ -5142,31 +5163,80 @@ function Tab:Expand(cfg)
             }, sh)
 
             local dragging = false
+            local moved = false          -- 按下后是否真的拖动过
+            local pressX = 0             -- 按下时的 X，用于算位移
+            local sfxPlayed = false      -- 本次按下是否已经响过
+
+            -- 取屏幕鼠标 X（AbsolutePosition 也是屏幕坐标，X 轴不用减 inset）
+            local function guiX()
+                local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+                if ok and typeof(loc) == "Vector2" then return loc.X end
+                return nil
+            end
+
+            -- 只在第一次调用时响
+            local function sfxOnce()
+                if sfxPlayed then return end
+                sfxPlayed = true
+                playClick()
+            end
+
             local function setX(x)
                 local ax = track.AbsolutePosition.X
                 local a = math.clamp((x - ax) / SW, 0, 1)
-                val = mn + (mx - mn) * a
-                val = math.floor(val / st + 0.5) * st
+                local nv = mn + (mx - mn) * a
+                nv = math.floor(nv / st + 0.5) * st
+                if nv == val then return end    -- 值没变就不重绘，减少卡顿
+                val = nv
                 renderSub()
                 self.Window.State[ckey] = val
                 if child.Callback then UI.safeCall(child.Callback, val) end
             end
+
             hit.MouseButton1Down:Connect(function()
                 dragging = true
-                local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-                if ok and loc then setX(loc.X) end
+                moved = false
+                sfxPlayed = false
+                pressX = guiX() or 0
+                -- 标记：内容区不要跟着滚
+                _G.__CDMUISliderDragging = true
+                if _G.__CDMUIInertiaStoppers then
+                    for _, fn in pairs(_G.__CDMUIInertiaStoppers) do pcall(fn) end
+                end
+                local x = guiX()
+                if x then setX(x) end
+                sfxOnce()              -- 按下响一次
             end)
+
+            local function finishDrag()
+                if not dragging then return end
+                dragging = false
+                _G.__CDMUISliderDragging = false
+                -- 只有「没拖动过（就是点一下）」才在松手时补一声
+                if not moved then sfxOnce() end
+            end
+
+            hit.MouseButton1Up:Connect(finishDrag)
+
             UserInputService.InputEnded:Connect(function(input)
                 if input.UserInputType == Enum.UserInputType.MouseButton1
                     or input.UserInputType == Enum.UserInputType.Touch then
-                    dragging = false
+                    finishDrag()
                 end
             end)
+
             UserInputService.InputChanged:Connect(function(input)
                 if not dragging then return end
                 if input.UserInputType == Enum.UserInputType.MouseMovement
                     or input.UserInputType == Enum.UserInputType.Touch then
-                    setX(input.Position.X)
+                    local x = guiX()
+                    if not x then return end
+                    -- 位移超过阈值才算拖动（手机手指抖动大，放宽到 4px）
+                    local th = IS_MOBILE and 4 or 2
+                    if not moved and math.abs(x - pressX) > th then
+                        moved = true
+                    end
+                    setX(x)
                 end
             end)
 
@@ -5545,64 +5615,89 @@ function Tab:Slider(cfg)
         valueLabel.Text = (step >= 1) and tostring(math.floor(value + 0.5)) or string.format("%.2f", value)
     end
 
+    -- 触摸热区：手机端加高，手指更好按
+    local hitH = IS_MOBILE and 44 or 22
     local hit = mk("TextButton", {
         Name = "SliderHit",
-        Size = UDim2.new(0, SLIDER_W, 0, 22),
-        Position = UDim2.new(0, 0, 0.5, -11),
+        Size = UDim2.new(0, SLIDER_W, 0, hitH),
+        Position = UDim2.new(0, 0, 0.5, -hitH / 2),
         BackgroundTransparency = 1,
         Text = "",
         AutoButtonColor = false,
         ZIndex = 9,
     }, holder)
 
-    -- 音效节流：拖动时每 90ms 最多响一次，避免连续爆音
-    local lastSfx = 0
-    local function tickSfx()
-        local now = os.clock()
-        if now - lastSfx >= 0.09 then
-            lastSfx = now
-            playClick()
-        end
-    end
-
-    local function setFromX(x, silentSfx)
+    local function setFromX(x)
         local absX = track.AbsolutePosition.X
         local alpha = math.clamp((x - absX) / SLIDER_W, 0, 1)
         local raw = minV + (maxV - minV) * alpha
         if step >= 1 then
             raw = math.floor(raw / step + 0.5) * step
         end
-        value = math.clamp(raw, minV, maxV)
+        local nv = math.clamp(raw, minV, maxV)
+        if nv == value then return end     -- 值没变就不重绘，减少卡顿
+        value = nv
         render()
-        if not silentSfx then tickSfx() end
         if cfg.Callback then UI.safeCall(cfg.Callback, value) end
         self.Window.State[key] = value
     end
 
     local dragging = false
+    local moved = false
+    local pressX = 0
+    local sfxPlayed = false
+
+    local function guiMouseX()
+        local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+        if ok and typeof(loc) == "Vector2" then return loc.X end
+        return nil
+    end
+
+    local function sfxOnce()
+        if sfxPlayed then return end
+        sfxPlayed = true
+        playClick()
+    end
+
     hit.MouseButton1Down:Connect(function()
         dragging = true
-        lastSfx = 0            -- 每次按下都保证响一声
-        local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-        if ok and loc then setFromX(loc.X) end
+        moved = false
+        sfxPlayed = false
+        pressX = guiMouseX() or 0
+        _G.__CDMUISliderDragging = true
+        if _G.__CDMUIInertiaStoppers then
+            for _, fn in pairs(_G.__CDMUIInertiaStoppers) do pcall(fn) end
+        end
+        local mx = guiMouseX()
+        if mx then setFromX(mx) end
+        sfxOnce()
     end)
 
-    -- 松手时也响一声（确认操作结束）
-    hit.MouseButton1Up:Connect(function()
-        lastSfx = 0
-        tickSfx()
-    end)
+    local function finishDrag()
+        if not dragging then return end
+        dragging = false
+        _G.__CDMUISliderDragging = false
+        if not moved then sfxOnce() end
+    end
+
+    hit.MouseButton1Up:Connect(finishDrag)
+
     UserInputService.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
+            finishDrag()
         end
     end)
+
     UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         if input.UserInputType == Enum.UserInputType.MouseMovement
             or input.UserInputType == Enum.UserInputType.Touch then
-            setFromX(input.Position.X)
+            local mx = guiMouseX()
+            if not mx then return end
+            local th = IS_MOBILE and 4 or 2
+            if not moved and math.abs(mx - pressX) > th then moved = true end
+            setFromX(mx)
         end
     end)
 
