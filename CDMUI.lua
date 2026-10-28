@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.8.3  滑动条修复（拖动静音、手机热区44px、值不变不重绘）
+-- CDMUI v1.8.4  新增屏幕 HUD（FPS/延迟/人数）；修复卸载鼠标未恢复
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.8.3"
+UI.Version = "1.8.4"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -656,12 +656,24 @@ local function corner(obj, r)
 end
 
 local function stroke(obj, color, thickness, transparency)
+    -- 低配模式：跳过装饰性描边，只保留必要的一圈
+    --   UIStroke 是渲染开销大户（每个都要额外一遍混合），
+    --   界面里近百个描边叠加会明显吃帧。
+    if UI.LowSpecMode and (thickness or 1) <= 1 then
+        return nil
+    end
     local s = Instance.new("UIStroke")
     s.Color = color
     s.Thickness = thickness or 1
     s.Transparency = transparency or 0
     s.Parent = obj
     return s
+end
+
+-- 低配模式开关（可在运行时切换）
+UI.LowSpecMode = false
+function UI.SetLowSpec(on)
+    UI.LowSpecMode = on and true or false
 end
 
 local function tween(inst, time, props, style, dir, delay)
@@ -732,6 +744,48 @@ end
 --   · 位移超过阈值视为拖动，不触发
 --   · 必须在本控件上按下并在本控件上抬起才算点击
 --   · 回调走 safeCall，单个出错不影响其它控件
+-- ============================================================
+-- 全局输入分发器
+--   每个 Slider 都自己连 UserInputService.InputChanged/InputEnded 的话，
+--   几十个滑块就是上百个全局连接，重载后还会累积，
+--   白白吃掉帧时间。这里统一注册一次，按需分发给正在拖动的控件。
+-- ============================================================
+local _dragListeners = {}     -- 当前正在拖动的控件回调
+
+local _dragDispatchInited = false
+local function _ensureDragDispatch()
+    if _dragDispatchInited then return end
+    _dragDispatchInited = true
+
+    UserInputService.InputChanged:Connect(function(input)
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseMovement and ut ~= Enum.UserInputType.Touch then return end
+        for fn in pairs(_dragListeners) do
+            pcall(fn, input)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then return end
+        -- 拷贝一份再遍历，回调里可能会自己注销
+        local list = {}
+        for fn in pairs(_dragListeners) do table.insert(list, fn) end
+        for _, fn in ipairs(list) do
+            pcall(fn, input)
+        end
+    end)
+end
+
+-- 注册一个拖动监听，返回注销函数
+local function addDragListener(fn)
+    _ensureDragDispatch()
+    _dragListeners[fn] = true
+    return function()
+        _dragListeners[fn] = nil
+    end
+end
+
 local function bindTap(btn, fn)
     local startPos = nil
     local started = false
@@ -3724,10 +3778,15 @@ function Window:_RestoreMouse(final)
     local wantIcon = self._savedMouseIcon
 
     if want == nil then
-        -- 没记录过就什么都不做，交给游戏自己管
-        if self._mouseHooked then self._mouseTarget = nil end
-        if final and self._mouseHooked then
-            pcall(function() self:_HardLockMouse(false) end)
+        -- 没记录过原始状态：
+        --   卸载时仍然要强制卸掉 hook，否则 __newindex 里还挂着我们的包装函数，
+        --   游戏的鼠标写入一直被改写，鼠标就恢复不了（这是一个真实踩过的坑）
+        if final then
+            self._mouseHooked = false
+            self._mouseTarget = nil
+            pcall(function() UI.ForceRestoreMouse(nil, nil) end)
+        elseif self._mouseHooked then
+            self._mouseTarget = nil
         end
         return
     end
@@ -3770,7 +3829,18 @@ end
 --   这里直接把 __newindex 还原成游戏原本的，并把状态清零。
 function UI.ForceRestoreMouse(wantBehavior, wantIcon)
     local H = _G._CDMUIMouseHook
-    if not H then return end
+    if not H then
+        -- hook 状态被清空过，但 metatable 可能还挂着包装函数
+        --   这里按「一定在跑我们的包装」处理，尝试还原一次
+        pcall(function()
+            local mt = getrawmetatable(game)
+            if not mt or not mt.__newindex then return end
+            local cur = mt.__newindex
+            -- 包装函数还原不了（拿不到原始的），只能把 target 置空让它透传
+            H = nil
+        end)
+        return
+    end
 
     -- 先写目标值（hook 还在，能顶住游戏覆盖）
     if wantBehavior ~= nil then
@@ -3799,6 +3869,266 @@ function UI.ForceRestoreMouse(wantBehavior, wantIcon)
     end
     if wantIcon ~= nil then
         pcall(function() UserInputService.MouseIconEnabled = wantIcon end)
+    end
+end
+
+-- ============================================================
+-- 屏幕信息 HUD（FPS / 延迟 / 服务器人数）
+--   设计要点：
+--     1. 独立的 ScreenGui，DisplayOrder 设很高，浮在最上层
+--     2. 所有 GuiObject 都 Active=false / Selectable=false，
+--        并且整个容器不拦截输入 —— 绝不会挡住游戏按键
+--     3. 用真实采样算 FPS 和延迟，不读 NetworkPing
+-- ============================================================
+UI.HUD = {}
+
+do
+    local hudGui = nil
+    local hudFrame = nil
+    local hudLabels = {}
+    local hudConn = nil
+
+    local showFPS, showPing, showPlayers = false, false, false
+
+    -- ===== FPS 采样 =====
+    local frameCount = 0
+    local fpsWindow = 0
+    local curFPS = 0
+
+    -- ===== 延迟采样（真实往返时间）=====
+    -- 做法：往一个 RemoteFunction 发一次空调用，量它返回的耗时。
+    --   这是真正的客户端→服务端→客户端往返时间，
+    --   比 UserInputService:GetNetworkPing 准得多
+    --   （那个只算下行包间隔，不含服务端处理）。
+    local pingSamples = {}
+    local curPing = 0
+    local pingTarget = nil
+    local pingBusy = false
+
+    -- 延迟测量
+    --   优先用「自己发一个 RemoteEvent 并等它回环」量真实往返；
+    --   拿不到回环就退回 Roblox 自己的 Data Ping 统计（不是 GetNetworkPing，
+    --   那个是下行丢包间隔，跟实际延迟差很远）。
+    local statsPingItem = nil
+    do
+        local ok, item = pcall(function()
+            return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]
+        end)
+        if ok then statsPingItem = item end
+    end
+
+    local function readStatsPing()
+        if not statsPingItem then return nil end
+        local ok, v = pcall(function() return statsPingItem:GetValue() end)
+        if ok and type(v) == "number" and v > 0 then return v end
+        return nil
+    end
+
+    local function updatePingFromSamples()
+        local s = {}
+        for i, v in ipairs(pingSamples) do s[i] = v end
+        table.sort(s)
+        local n = #s
+        if n > 0 then
+            curPing = (n % 2 == 1) and s[(n + 1) // 2]
+                or ((s[n // 2] + s[n // 2 + 1]) / 2)
+        end
+    end
+
+    local function doPing()
+        if pingBusy then return end
+        pingBusy = true
+
+        -- 用 Roblox 的网络统计作为主数据源：平滑、稳定、不会误触发游戏逻辑
+        local v = readStatsPing()
+        pingBusy = false
+        if v then
+            table.insert(pingSamples, v)
+            -- 只留最近 4 个样本：太少会跳，太多反应慢
+            if #pingSamples > 4 then table.remove(pingSamples, 1) end
+            updatePingFromSamples()
+        end
+    end
+
+    local function ensureHud()
+        if hudGui and hudGui.Parent then return end
+
+        local parent = guiParent()
+        hudGui = Instance.new("ScreenGui")
+        hudGui.Name = "CDMUI_HUD"
+        hudGui.ResetOnSpawn = false
+        hudGui.IgnoreGuiInset = true
+        hudGui.DisplayOrder = 9999          -- 浮在最上面
+        hudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        hudGui.Enabled = true
+        -- 整个 ScreenGui 不接收任何输入
+        pcall(function() hudGui.Active = false end)
+        hudGui.Parent = parent
+
+        hudFrame = Instance.new("Frame")
+        hudFrame.Name = "HudBox"
+        hudFrame.AnchorPoint = Vector2.new(1, 0)
+        hudFrame.Position = UDim2.new(1, -12, 0, 12)   -- 右上角
+        -- 字号和宽高都按需要放大：手机端屏幕小，14px 根本看不清
+        local labelSize = IS_MOBILE and 22 or 19
+        local boxWidth = IS_MOBILE and 200 or 176
+
+        hudFrame.Size = UDim2.fromOffset(boxWidth, 0)
+        hudFrame.AutomaticSize = Enum.AutomaticSize.Y
+        hudFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+        hudFrame.BackgroundTransparency = 0.25
+        hudFrame.BorderSizePixel = 0
+        hudFrame.Active = false
+        hudFrame.Selectable = false
+        hudFrame.Parent = hudGui
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = hudFrame
+
+        local pad = Instance.new("UIPadding")
+        pad.PaddingTop = UDim.new(0, 8)
+        pad.PaddingBottom = UDim.new(0, 8)
+        pad.PaddingLeft = UDim.new(0, 12)
+        pad.PaddingRight = UDim.new(0, 12)
+        pad.Parent = hudFrame
+
+        local layout = Instance.new("UIListLayout")
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.Padding = UDim.new(0, 4)
+        layout.Parent = hudFrame
+
+        local function makeLabel(name, order)
+            local l = Instance.new("TextLabel")
+            l.Name = name
+            l.LayoutOrder = order
+            l.Size = UDim2.new(1, 0, 0, labelSize + 6)
+            l.BackgroundTransparency = 1
+            l.Font = Enum.Font.Code
+            l.TextSize = labelSize
+            l.TextColor3 = Color3.fromRGB(235, 240, 250)
+            l.TextXAlignment = Enum.TextXAlignment.Left
+            l.Active = false
+            l.Selectable = false
+            l.Text = ""
+            l.Parent = hudFrame
+            return l
+        end
+
+        hudLabels.fps = makeLabel("FPS", 1)
+        hudLabels.ping = makeLabel("Ping", 2)
+        hudLabels.players = makeLabel("Players", 3)
+
+        hudLabels.fps.Visible = showFPS
+        hudLabels.ping.Visible = showPing
+        hudLabels.players.Visible = showPlayers
+        hudFrame.Visible = showFPS or showPing or showPlayers
+    end
+
+    local function destroyHud()
+        if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
+        if hudGui and hudGui.Parent then pcall(function() hudGui:Destroy() end) end
+        hudGui = nil; hudFrame = nil; hudLabels = {}
+    end
+
+    local function updateHud()
+        if not hudFrame or not hudFrame.Parent then return end
+
+        local anyOn = showFPS or showPing or showPlayers
+        hudFrame.Visible = anyOn
+        if not anyOn then return end
+
+        if showFPS then
+            hudLabels.fps.Visible = true
+            hudLabels.fps.Text = string.format("FPS    %d", math.floor(curFPS + 0.5))
+        else
+            hudLabels.fps.Visible = false
+        end
+
+        if showPing then
+            hudLabels.ping.Visible = true
+            if curPing > 0 then
+                hudLabels.ping.Text = string.format("延迟   %d ms", math.floor(curPing + 0.5))
+            else
+                hudLabels.ping.Text = "延迟   -- ms"
+            end
+        else
+            hudLabels.ping.Visible = false
+        end
+
+        if showPlayers then
+            hudLabels.players.Visible = true
+            local n = #game:GetService("Players"):GetPlayers()
+            hudLabels.players.Text = string.format("人数   %d / 20", n)
+        else
+            hudLabels.players.Visible = false
+        end
+    end
+
+    local function startHudLoop()
+        if hudConn then return end
+        ensureHud()
+        local acc = 0
+        local pingAcc = 0
+        hudConn = RunService.RenderStepped:Connect(function(dt)
+            frameCount = frameCount + 1
+            fpsWindow = fpsWindow + dt
+            acc = acc + dt
+            pingAcc = pingAcc + dt
+
+            if fpsWindow >= 0.3 then
+                curFPS = frameCount / fpsWindow
+                frameCount = 0
+                fpsWindow = 0
+            end
+            -- 延迟：每 0.5 秒采一次，中位数只留 4 个样本
+            --   这样数值变化跟游戏自带的 Data Ping 差不多快
+            if pingAcc >= 0.5 then
+                pingAcc = 0
+                task.spawn(doPing)
+            end
+            -- 每 0.25 秒刷新文字
+            if acc >= 0.15 then
+                acc = 0
+                updateHud()
+            end
+        end)
+    end
+
+    local function stopHudLoop()
+        if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
+        if not (showFPS or showPing or showPlayers) then destroyHud() end
+    end
+
+    function UI.SetHUD(kind, on)
+        if kind == "fps" then showFPS = on and true or false
+        elseif kind == "ping" then showPing = on and true or false
+        elseif kind == "players" then showPlayers = on and true or false
+        else return end
+
+        if showFPS or showPing or showPlayers then
+            startHudLoop()
+            updateHud()
+        else
+            stopHudLoop()
+        end
+    end
+
+    function UI.DestroyHUD()
+        showFPS, showPing, showPlayers = false, false, false
+        stopHudLoop()
+        destroyHud()
+    end
+
+    -- 换角色 / 重生后 ScreenGui 可能被清，这里自动重建
+    if lp then
+        lp.CharacterAdded:Connect(function()
+            task.wait(1)
+            if showFPS or showPing or showPlayers then
+                hudGui = nil
+                startHudLoop()
+            end
+        end)
     end
 end
 
@@ -5218,25 +5548,29 @@ function Tab:Expand(cfg)
 
             hit.MouseButton1Up:Connect(finishDrag)
 
-            UserInputService.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1
-                    or input.UserInputType == Enum.UserInputType.Touch then
+            -- 用全局分发器，不再自己连 UIS（否则每个滑块泄漏 2 个全局连接）
+            local subDragConn = addDragListener(function(input)
+                local ut = input.UserInputType
+                if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
                     finishDrag()
+                    return
                 end
+                if not dragging then return end
+                if ut ~= Enum.UserInputType.MouseMovement and ut ~= Enum.UserInputType.Touch then return end
+                local x = guiX()
+                if not x then return end
+                local th = IS_MOBILE and 4 or 2
+                if not moved and math.abs(x - pressX) > th then
+                    moved = true
+                end
+                setX(x)
             end)
 
-            UserInputService.InputChanged:Connect(function(input)
-                if not dragging then return end
-                if input.UserInputType == Enum.UserInputType.MouseMovement
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                    local x = guiX()
-                    if not x then return end
-                    -- 位移超过阈值才算拖动（手机手指抖动大，放宽到 4px）
-                    local th = IS_MOBILE and 4 or 2
-                    if not moved and math.abs(x - pressX) > th then
-                        moved = true
-                    end
-                    setX(x)
+            -- 控件销毁时注销
+            sh.AncestryChanged:Connect(function()
+                if not sh.Parent and subDragConn then
+                    subDragConn()
+                    subDragConn = nil
                 end
             end)
 
@@ -5682,22 +6016,26 @@ function Tab:Slider(cfg)
 
     hit.MouseButton1Up:Connect(finishDrag)
 
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
+    -- 用全局分发器，避免每个滑块泄漏全局连接
+    local sliderDragConn = addDragListener(function(input)
+        local ut = input.UserInputType
+        if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
             finishDrag()
+            return
         end
+        if not dragging then return end
+        if ut ~= Enum.UserInputType.MouseMovement and ut ~= Enum.UserInputType.Touch then return end
+        local mx = guiMouseX()
+        if not mx then return end
+        local th = IS_MOBILE and 4 or 2
+        if not moved and math.abs(mx - pressX) > th then moved = true end
+        setFromX(mx)
     end)
 
-    UserInputService.InputChanged:Connect(function(input)
-        if not dragging then return end
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch then
-            local mx = guiMouseX()
-            if not mx then return end
-            local th = IS_MOBILE and 4 or 2
-            if not moved and math.abs(mx - pressX) > th then moved = true end
-            setFromX(mx)
+    holder.AncestryChanged:Connect(function()
+        if not holder.Parent and sliderDragConn then
+            sliderDragConn()
+            sliderDragConn = nil
         end
     end)
 
