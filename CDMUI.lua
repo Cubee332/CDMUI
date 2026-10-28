@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.7.0  Tab 点击与拖动重写（死区+实时跟随）；布局间隔修复；悬浮刷新与滚动优化
+-- CDMUI v1.7.1  修复坐标系统偏移（GetMouseLocation 含 GuiInset）导致 Tab 拖动误判
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.7.0"
+UI.Version = "1.7.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -535,6 +535,35 @@ local function detectMobile()
 end
 
 local IS_MOBILE = detectMobile()
+
+-- ============================================================
+-- 鼠标坐标转换
+--   GetMouseLocation() 返回屏幕坐标（含顶部 inset）
+--   AbsolutePosition 是不含 inset 的 GUI 坐标
+--   面板的 ScreenGui 设了 IgnoreGuiInset=false，所以要做减法
+--   这个差异是 58px 左右，之前所有坐标判定都因此错位
+-- ============================================================
+local _guiInsetY = 0
+pcall(function()
+    local GuiService = game:GetService("GuiService")
+    local inset = GuiService:GetGuiInset()
+    if typeof(inset) == "Vector2" then _guiInsetY = inset.Y end
+end)
+
+local function mouseToGui()
+    local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+    if not ok or typeof(loc) ~= "Vector2" then return nil end
+    return Vector2.new(loc.X, loc.Y - _guiInsetY)
+end
+
+-- 从输入事件取 GUI 坐标（事件自带的 Position 已是 GUI 坐标，优先用它）
+local function inputGuiPos(input)
+    local ok, v = pcall(function() return input.Position end)
+    if ok and typeof(v) == "Vector2" and (v.X ~= 0 or v.Y ~= 0) then
+        return v
+    end
+    return mouseToGui()
+end
 
 -- 平台判定结果（只读）
 UI.IsMobile = IS_MOBILE
@@ -913,16 +942,7 @@ local function attachInertia(frame, opts)
     end
 
     local function posOf(input)
-        -- 优先用事件里的位置
-        local ok, v = pcall(function() return input.Position end)
-        if ok and typeof(v) == "Vector2" then
-            -- 部分环境下 Position 可能是 (0,0)，用鼠标位置兜底
-            if v.X ~= 0 or v.Y ~= 0 then return v end
-        end
-        -- 兜底：直接问鼠标位置
-        local ok2, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-        if ok2 and typeof(loc) == "Vector2" then return loc end
-        return nil
+        return inputGuiPos(input)
     end
 
     -- 判断某个屏幕坐标是否落在 frame 内
@@ -957,10 +977,8 @@ local function attachInertia(frame, opts)
         local pos = posOf(input)
 
         -- 落在排除区域（如 Tab 栏）内：不处理
-        -- 排除判定：用鼠标真实位置（比 input.Position 可靠）
-        local mp = nil
-        local okLoc, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-        if okLoc and typeof(loc) == "Vector2" then mp = loc end
+        -- 排除判定：用转换后的 GUI 坐标
+        local mp = mouseToGui()
 
         if mp and inExcluded(mp) then return end
         if pos and inExcluded(pos) then return end
@@ -1147,8 +1165,8 @@ local function refreshHover(root)
     end
     _hoverLastRun = now
 
-    local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-    if not ok or typeof(loc) ~= "Vector2" then return end
+    local loc = mouseToGui()
+    if not loc then return end
 
     -- 只扫直接子元素（行都是 List 的直接子元素），比 GetDescendants 快得多
     local function check(d)
@@ -2042,15 +2060,7 @@ local function bindShieldClose(self)
         end
         if not self.Visible or self.Busy or self.Destroyed then return end
 
-        -- 取点击位置：优先事件自带，退化到鼠标位置
-        local pos
-        local ok, v = pcall(function() return input.Position end)
-        if ok and typeof(v) == "Vector2" and (v.X ~= 0 or v.Y ~= 0) then
-            pos = v
-        else
-            local ok2, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-            if ok2 and typeof(loc) == "Vector2" then pos = loc end
-        end
+        local pos = inputGuiPos(input)
         if not pos then return end
 
         local ap = self.Panel.AbsolutePosition
@@ -2329,13 +2339,8 @@ function UI.Create(opts)
             end
         end
 
-        -- 获取输入位置（input.Position 有时是 (0,0)，用鼠标位置兜底）
         local function posOf2(input)
-            local ok, v = pcall(function() return input.Position end)
-            if ok and typeof(v) == "Vector2" and (v.X ~= 0 or v.Y ~= 0) then return v end
-            local ok2, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-            if ok2 and typeof(loc) == "Vector2" then return loc end
-            return nil
+            return inputGuiPos(input)
         end
 
         local function onBegin(input)
@@ -3907,13 +3912,9 @@ function Window:Tab(name)
             tween(btn, 0.12, { BackgroundColor3 = T.tabIdle })
         end
     end)
-    -- Tab 点击：Activated 只在真正点击时触发，拖动不会误触
-    table.insert(self.Connections, btn.Activated:Connect(function()
-        local blockUntil = getgenv()._CDMUITabDragBlock
-        if blockUntil and os.clock() < blockUntil then return end
-        playClick()
-        self:SelectTab(tabIndex)
-    end))
+    -- Tab 点击统一由 Tab 栏的 onEnd 处理（见下方 Tab 栏拖动逻辑）
+    --   不再用 Activated：ScrollingFrame 会吞掉它，而且拖动时也会误触发
+    --   保留一个空连接占位，方便外部调试时能找到
 
     self:LayoutTabs()
 
