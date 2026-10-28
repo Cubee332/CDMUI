@@ -1,414 +1,239 @@
 # CDMUI
 
-Roblox / Luau 单文件控制面板 UI 库。零依赖，`loadstring` 直载。
+Roblox 控制面板 UI 库，单文件、零依赖，`loadstring` 就能直接用。
 
-- **控件齐全** — Toggle / Slider / Cycle / Input / Keybind / MultiSelect / Expand / Body2D / Dropdown / ColorPicker / TextBox / Progress / Section / Label / Divider / Buttons
-- **统一视觉** — 全库共用一套色阶与尺寸规范，改一处全局生效
-- **完整动效** — 面板进出场、Tab 收起展开、子项逐行撑开、勾选框缩放弹出、按钮按压回弹
-- **PC / 移动端自适应** — 统一管理两套尺寸，移动端放大点击区域、Tab 平分整行、支持拖动面板
+写了很久了，从最早只想要一个能开开关关的面板，到后来控件越加越多，索性整理成一个库。目前有 19 种控件，PC 和手机都能用。
 
----
-
-## 目录
-
-- [快速开始](#快速开始)
-- [完整示例](#完整示例)
-- [API 参考](#api-参考)
-  - [UI.Create](#uicreateopts)
-  - [Window 方法](#window-方法)
-  - [Tab 方法](#tab-方法)
-- [控件详解](#控件详解)
-- [使用场景](#使用场景)
-- [移动端适配](#移动端适配)
-- [主题与自定义](#主题与自定义)
-- [**接入新脚本必读**](#接入新脚本必读)
-- [常见问题](#常见问题)
-- [调试与故障排查](#调试与故障排查)
-
----
-
-## 快速开始
+如果你只是想要一个能跑的界面，直接看下面的快速开始，五行代码就能出来。
 
 ```lua
 local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
 
-local win = UI.Create({ Title = "演示面板" })
-local tab = win:Tab("演示页")
+local win = UI.Create({ Title = "面板" })
+local tab = win:Tab("基础")
 
-tab:Toggle({
-    Key = "demo_toggle",
-    Name = "演示开关",
-    Desc = "这是一段演示说明文本",
-    Default = false,
-    Callback = function(v) print("demo_toggle", v) end,
+tab:Toggle({ Key = "k", Name = "开关", Callback = function(v) print(v) end })
+```
+
+---
+
+## 装进去
+
+三种方式，随便挑一种。
+
+**远程加载**，最省事：
+
+```lua
+local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
+```
+
+**本地文件**，把 `CDMUI.lua` 丢进执行器 workspace：
+
+```lua
+local UI = loadstring(readfile("CDMUI.lua"))()
+```
+
+**锁版本**，不想被上游更新影响行为的话，指定 commit：
+
+```lua
+local URL = "https://raw.githubusercontent.com/Cubee332/CDMUI/77fb1434/CDMUI.lua"
+local UI = loadstring(game:HttpGet(URL))()
+```
+
+有个坑要提醒一下：`loadstring` 返回的是个函数，后面得加 `()` 调用才能拿到 UI 表。第一次用的时候卡了半天才发现。
+
+---
+
+## 创建一个窗口
+
+```lua
+local win = UI.Create({
+    Title = "我的面板",        -- 顶部大标题
+    TopbarText = "打开面板",   -- 左上角按钮文字
+    AutoOpen = true,           -- 创建后直接显示
+    TopbarButton = true,       -- 要不要生成顶栏按钮
 })
 ```
 
-三行核心概念：
+能传的参数就这几个：
 
-1. `UI.Create()` 创建窗口
-2. `win:Tab()` 创建分页
-3. `tab:Toggle()` / `tab:Slider()` / ... 往分页里加控件
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `Title` | `"控制面板"` | 顶部标题 |
+| `TopbarText` | 同 Title | 顶栏按钮文字 |
+| `AutoOpen` | `true` | 创建后自动显示 |
+| `AutoUnlockMouse` | `true` | 打开时解锁鼠标 |
+| `TopbarButton` | `true` | 是否生成顶栏按钮 |
+| `GuiName` | `"ControlPanelUI"` | ScreenGui 名字，调试用 |
+| `DisplayOrder` | `101` | 显示层级 |
 
 ---
 
-## 完整示例
-
-下面是一个覆盖所有控件的完整例子：
+## 窗口能干什么
 
 ```lua
-local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
+win:Tab("基础")              -- 新建分页
+win:SelectTab(2)             -- 切到第二页
+win:SelectTab(2, true)       -- 切页但不播动画
+win:SetVisible(false)        -- 隐藏面板
+win:Toggle()                 -- 开关面板
+win:Notify("搞定了", 3)      -- 弹个提示，3 秒
+win:Destroy()                -- 销毁
+```
 
--- ============ 创建窗口 ============
-local win = UI.Create({
-    Title = "演示面板",            -- 顶部大标题
-    TopbarText = "演示面板",       -- 左上角按钮文字（不传则不创建按钮）
-    ToggleKey = Enum.KeyCode.RightShift,   -- 可选：快捷键（建议不设，避免冲突）
-})
+状态的读写这块，之前设计走过弯路，现在定了这么一套：
 
--- ============ 第一页：基础控件 ============
-local page1 = win:Tab("基础")
+```lua
+win:Get("key")               -- 读
+win:Set("key", value)        -- 写 + 重绘 + 触发回调
+win:SetSilent("key", value)  -- 写 + 重绘，不触发回调
+win:SetMany({ a = 1, b = 2 })-- 批量写
+win:RepaintAll()             -- 把 State 全量刷到界面
+```
 
-page1:Label({ Name = "分组说明", Desc = "下面是一些基础控件" })
+`win.State` 是唯一的数据源，界面显示永远从它渲染。这样不会出现"逻辑改了界面没变"或者反过来的情况。
 
-page1:Toggle({
-    Key = "demo_toggle",
-    Name = "演示开关",
-    Desc = "开关类功能的说明文字",
+`Set` 和 `SetSilent` 的区别就一个：要不要触发回调。做功能互斥的时候用 `SetSilent`，避免 A 关 B、B 又去关 A 这种死循环。
+
+---
+
+## 控件
+
+所有控件都挂在 `tab` 上。通用的三个字段是 `Key`、`Name`、`Desc`，下面就不重复写了。
+
+### Toggle 开关
+
+```lua
+tab:Toggle({
+    Key = "esp",
+    Name = "透视",
+    Desc = "显示所有敌人",
     Default = false,
     Callback = function(v)
-        print("开关状态:", v)
-    end,
-})
-
-page1:Slider({
-    Key = "demo_slider",
-    Name = "演示滑条",
-    Desc = "拖动或点击调整数值",
-    Min = 0, Max = 100, Step = 5, Default = 50,
-    Callback = function(v) print("滑条数值:", v) end,
-})
-
-page1:Cycle({
-    Key = "demo_cycle",
-    Name = "演示选择",
-    Desc = "左右切换选项",
-    Options = { "选项甲", "选项乙", "选项丙" },
-    DefaultIndex = 1,
-    Callback = function(option, index)
-        print("选中:", option, index)
-    end,
-})
-
-page1:Input({
-    Key = "demo_input",
-    Name = "演示输入",
-    Desc = "输入数字后回车确认",
-    Default = "100",
-    Quick = { 50, 200 },          -- 可选：右侧快捷值按钮
-    Callback = function(v) print("输入值:", v) end,
-})
-
-page1:Keybind({
-    Key = "demo_keybind",
-    Name = "演示按键",
-    Desc = "点击后按下任意键绑定",
-    Default = Enum.KeyCode.F,
-    Callback = function(key) print("绑定:", key.Name) end,
-})
-
--- ============ 第二页：可展开分组 ============
-local page2 = win:Tab("分组")
-
-page2:Expand({
-    Key = "group_a",
-    Name = "分组甲",
-    Desc = "展开后有子项",
-    Default = false,
-    Callback = function(v) print("分组甲开关:", v) end,
-    Children = {
-        { Kind = "toggle", Key = "sub_a1", Name = "子开关 A", Default = true },
-        { Kind = "toggle", Key = "sub_a2", Name = "子开关 B", Default = false },
-        { Kind = "number", Key = "sub_a3", Name = "子数值", Min = 1, Max = 20, Default = 4 },
-        { Kind = "cycle",  Key = "sub_a4", Name = "子选择", Options = { "甲", "乙" } },
-        { Kind = "slider", Key = "sub_a5", Name = "子滑条", Min = 0, Max = 1, Step = 0.05, Default = 0.5 },
-    },
-})
-
-page2:Divider()
-
-page2:Expand({
-    Key = "group_b",
-    Name = "分组乙",
-    Desc = "另一组子项",
-    Children = {
-        { Kind = "toggle", Key = "sub_b1", Name = "子开关 C", Default = true },
-    },
-})
-
--- ============ 第三页：多选与按钮 ============
-local page3 = win:Tab("其他")
-
-page3:MultiSelect({
-    Key = "demo_multi",
-    Name = "演示多选",
-    Desc = "可以同时选中多个",
-    Options = { "选项一", "选项二", "选项三" },
-    Default = { "选项一" },        -- 默认选中的项
-    Callback = function(selected)
-        -- selected 是一个 table：{ ["选项一"] = true, ... }
-        local list = {}
-        for k, v in pairs(selected) do
-            if v then table.insert(list, k) end
-        end
-        print("已选:", table.concat(list, ", "))
-    end,
-})
-
-page3:Divider()
-
-page3:Buttons({
-    Buttons = {
-        { Text = "重置", Variant = "secondary", Callback = function() print("重置") end },
-        { Text = "应用", Variant = "primary",   Callback = function() print("应用") end },
-    },
-})
-
--- ============ 通知 ============
-win:Notify("面板已加载", 3)     -- 第二个参数是持续时间（秒），默认 2.4
-
--- 暴露到全局方便调试
-getgenv().DemoWin = win
-```
-
----
-
-## API 参考
-
-### `UI.Create(opts)`
-
-创建并返回一个 `Window`。
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `Title` | string | `"控制面板"` | 顶部大标题文字 |
-| `TopbarText` | string | `"控制面板"` | 左上角顶栏按钮的文字；传 `false` 则不创建 |
-| `GuiName` | string | `"ControlPanelUI"` | ScreenGui 名称，调试时方便查找 |
-| `DisplayOrder` | number | `101` | 显示层级，数值越大越靠前 |
-| `AutoOpen` | bool | `true` | 创建后是否自动显示 |
-| `ToggleKey` | Enum.KeyCode | `nil` | 快捷键；**建议不设**，避免与游戏按键冲突 |
-
-```lua
--- 最小用法
-local win = UI.Create()
-
--- 完整用法
-local win = UI.Create({
-    Title = "我的面板",
-    TopbarText = "打开面板",
-    GuiName = "MyPanel",
-    DisplayOrder = 200,
-    AutoOpen = false,
-})
-```
-
-### `Window` 方法
-
-| 方法 | 参数 | 说明 |
-|---|---|---|
-| `win:Tab(name)` | string | 创建分页，返回 `Tab` 对象 |
-| `win:SelectTab(index, instant)` | number, bool | 切换分页；`instant=true` 跳过动画 |
-| `win:SetVisible(bool, instant)` | bool, bool | 显示 / 隐藏面板 |
-| `win:Toggle()` | - | 切换显示状态 |
-| `win:Notify(text, duration)` | string, number | 右侧弹入通知 |
-| `win:Get(key)` | string | 读取控件状态 |
-| `win:Set(key, value)` | string, any | 设置控件状态（不触发 Callback） |
-| `win:Destroy()` | - | 销毁面板并断开所有连接 |
-
-```lua
-win:SelectTab(2)              -- 切到第二页
-win:SetVisible(false)         -- 隐藏面板
-win:Notify("操作完成", 3)     -- 显示 3 秒通知
-local v = win:Get("demo_toggle")   -- 读状态
-win:Set("demo_toggle", true)       -- 写状态（不同步 UI 的 Callback）
-```
-
-### `Tab` 方法
-
-所有方法都返回一个控件对象，带有 `Set(value)` / `Get()` 方法。
-
-| 方法 | 说明 |
-|---|---|
-| `tab:Toggle(cfg)` | 勾选框开关 |
-| `tab:Slider(cfg)` | 滑动条 |
-| `tab:Cycle(cfg)` | 左右切换选择 |
-| `tab:Input(cfg)` | 数字输入框 |
-| `tab:Keybind(cfg)` | 按键绑定 |
-| `tab:MultiSelect(cfg)` | 多选 chips |
-| `tab:Expand(cfg)` | 可展开分组 |
-| `tab:Body2D(cfg)` | 标准 Roblox 小人，点选身体部位 |
-| `tab:Dropdown(cfg)` | 下拉选择 |
-| `tab:ColorPicker(cfg)` | 颜色选择（色相条） |
-| `tab:TextBox(cfg)` | 文本输入（非数字） |
-| `tab:Progress(cfg)` | 进度条（只读展示） |
-| `tab:Section(cfg)` | 分组标题 |
-| `tab:Label(cfg)` | 纯文字说明行 |
-| `tab:Divider()` | 分隔线 |
-| `tab:Buttons(cfg)` | 按钮行 |
-
----
-
-## 控件详解
-
-### 通用字段
-
-所有控件都支持这三个字段：
-
-| 字段 | 说明 |
-|---|---|
-| `Key` | 唯一标识，用于 `win:Get/Set` |
-| `Name` | 显示标题 |
-| `Desc` | 副标题说明（可选） |
-
-### Toggle — 勾选框
-
-```lua
-tab:Toggle({
-    Key = "feature_on",
-    Name = "功能名称",
-    Desc = "功能说明",
-    Default = false,              -- 默认是否勾选
-    Callback = function(v)        -- v 是 true / false
-        print(v)
+        print("透视 =", v)
     end,
 })
 ```
 
-### Slider — 滑动条
+### Slider 滑条
 
 ```lua
 tab:Slider({
-    Key = "volume",
-    Name = "音量",
-    Desc = "拖动调整",
-    Min = 0, Max = 100, Step = 5, Default = 50,
-    Callback = function(v) end,   -- v 是数字
+    Key = "speed",
+    Name = "速度倍率",
+    Min = 1, Max = 10, Default = 2,
+    Callback = function(v) print("倍率 =", v) end,
 })
 ```
 
-`Step` 控制精度：`1` 整数，`0.05` 两位小数。
-
-### Cycle — 左右切换
+### Cycle 循环切换
 
 ```lua
 tab:Cycle({
     Key = "mode",
-    Name = "模式",
-    Options = { "模式A", "模式B", "模式C" },
+    Name = "锁定模式",
+    Options = { "最近", "最高", "360°" },
     DefaultIndex = 1,
-    Callback = function(option, index)
-        print(option)   -- 当前选项的文字
-        print(index)    -- 当前选项的序号
+    Callback = function(idx, text)
+        print("选了", idx, text)
     end,
 })
 ```
 
-### Input — 数字输入
+回调第一个参数是索引数字，第二个才是文字。这一点很容易写错，我一开始就踩了——写成 `function(text)` 结果拿到的永远是数字。
+
+还有 `DefaultIndex` 必须写。写 `Default` 是没用的，界面永远显示第一项。
+
+### Input 数字输入
 
 ```lua
 tab:Input({
-    Key = "amount",
-    Name = "数量",
-    Desc = "输入后回车",
-    Default = "100",
-    Quick = { 50, 200 },          -- 右侧快捷值按钮（可选）
-    Callback = function(v) end,   -- v 是数字
+    Key = "fov",
+    Name = "FOV 半径",
+    Default = "200",
+    Min = 10, Max = 1000,
+    Callback = function(v) print("FOV =", v) end,
 })
 ```
 
-### Keybind — 按键绑定
+注意回调收到的是**字符串**，要数字自己 `tonumber`。
+
+### Keybind 按键绑定
 
 ```lua
 tab:Keybind({
     Key = "hotkey",
-    Name = "热键",
-    Desc = "点击后按任意键",
+    Name = "快捷键",
     Default = Enum.KeyCode.F,
-    Callback = function(keyCode)
-        print(keyCode.Name)   -- "F"
-    end,
+    Callback = function(code) print("按了", code.Name) end,
 })
 ```
 
-### MultiSelect — 多选
+### MultiSelect 多选
 
 ```lua
 tab:MultiSelect({
-    Key = "filters",
-    Name = "过滤项",
-    Options = { "甲", "乙", "丙" },
-    Default = { "甲" },           -- 默认选中
-    Callback = function(selected)
-        -- selected 结构：{ ["甲"] = true, ["乙"] = false, ... }
-        for name, on in pairs(selected) do
-            print(name, on)
-        end
+    Key = "targets",
+    Name = "目标类型",
+    Options = { "普通怪", "精英怪", "BOSS" },
+    Default = { "普通怪" },
+    Callback = function(list)
+        for _, v in ipairs(list) do print(v) end
     end,
 })
 ```
 
-### Expand — 可展开分组
+### Expand 可展开分组
 
-这是最常用的控件，用来收纳子选项，保持主界面简洁。
+这个用得最多，一个主开关带一堆子选项：
 
 ```lua
 tab:Expand({
-    Key = "esp_group",
-    Name = "透视设置",
-    Desc = "点击右侧箭头展开",
-    Default = false,              -- 主开关默认状态
-    Callback = function(v) end,
+    Key = "magic",
+    Name = "魔法子弹",
+    Desc = "子弹自动追踪",
+    Default = false,
+    Callback = function(v) print("魔法子弹 =", v) end,
+
+    -- 可选：右边放个切换按钮
+    Cycle = {
+        Key = "magic_mode",
+        Options = { "准星", "360°" },
+        DefaultIndex = 1,
+        Callback = function(idx) print("模式 =", idx) end,
+    },
+
     Children = {
-        -- 子开关
-        { Kind = "toggle", Key = "esp_name", Name = "显示名称", Default = true },
+        { Kind = "toggle", Key = "mb_box", Name = "显示头框", Default = true,
+          Callback = function(v) print("头框 =", v) end },
 
-        -- 子数值输入
-        { Kind = "number", Key = "esp_range", Name = "显示距离",
-          Min = 50, Max = 500, Default = 200 },
+        { Kind = "number", Key = "mb_dist", Name = "最大距离",
+          Min = 10, Max = 500, Default = 200,
+          Callback = function(v) print("距离 =", v) end },
 
-        -- 子选择
-        { Kind = "cycle", Key = "esp_mode", Name = "显示模式",
-          Options = { "简单", "详细" } },
+        { Kind = "cycle", Key = "mb_part", Name = "锁定部位",
+          Options = { "头", "身体" }, DefaultIndex = 1,
+          Callback = function(idx) print("部位 =", idx) end },
 
-        -- 子滑动条
-        { Kind = "slider", Key = "esp_alpha", Name = "透明度",
-          Min = 0, Max = 1, Step = 0.05, Default = 0.8 },
+        { Kind = "slider", Key = "mb_alpha", Name = "透明度",
+          Min = 0, Max = 100, Default = 50,
+          Callback = function(v) print("透明 =", v) end },
     },
 })
 ```
 
-子项类型：
+子项的 `Kind` 必须写，就这四种：`toggle`、`number`、`cycle`、`slider`。不写或者写错了，子项不会报错，但也不会显示——这个坑我踩过，排查了很久才发现是漏了 Kind。
 
-| `Kind` | 说明 | 额外字段 |
-|---|---|---|
-| `"toggle"` | 勾选框 | `Default` |
-| `"number"` | 数字输入框 | `Min` / `Max` / `Default` |
-| `"cycle"` | 左右切换 | `Options` |
-| `"slider"` | 滑动条 | `Min` / `Max` / `Step` / `Default` |
-
-### Body2D — 人体图选部位
-
-标准 Roblox R6 小人，点击选择身体部位。
+### Body2D 人体部位选择
 
 ```lua
 tab:Body2D({
     Key = "aim_part",
     Name = "锁定部位",
-    Desc = "点击小人选择",
-    Default = 1,                  -- 默认选中第 1 项（头部）
-    Callback = function(idx, label)
-        print(idx, label)         -- 1, "头部"
-    end,
+    Desc = "点小人选身体部位",
+    Default = 1,
+    Callback = function(idx) print("选了部位", idx) end,
+
     Parts = {
         { Key = 1, Name = "头部" },
         { Key = 2, Name = "躯干" },
@@ -420,585 +245,390 @@ tab:Body2D({
 })
 ```
 
-`Parts` 可以传任意数量（默认 6 个），但布局按 R6 六部位设计，改数量可能错位。
+默认是收起的，点标题行才展开。比例按 R6 来：头 60×60、躯干 90×90、四肢 45×90。
 
-### Dropdown — 下拉选择
-
-选项多时比 `Cycle` 好用。
+### Dropdown 下拉
 
 ```lua
 tab:Dropdown({
-    Key = "mode",
-    Name = "模式",
-    Desc = "点开选择",
-    Options = { "选项一", "选项二", "选项三", "选项四" },
-    Default = "选项一",
-    Callback = function(value, index)
-        print(value, index)
-    end,
+    Key = "profile",
+    Name = "配置",
+    Options = { "默认", "激进", "保守" },
+    Default = "默认",
+    Callback = function(v) print("配置 =", v) end,
 })
 ```
 
-超过 6 项时列表会限制高度（`min(n, 6) * 26px`）。
-
-### ColorPicker — 颜色选择
-
-色相条拖动，实时预览。
+### ColorPicker 颜色
 
 ```lua
 tab:ColorPicker({
-    Key = "tracer_color",
-    Name = "追踪线颜色",
-    Desc = "拖动色相条",
-    Default = Color3.fromRGB(255, 0, 0),
-    Callback = function(color)
-        print(color.R, color.G, color.B)
+    Key = "color",
+    Name = "颜色",
+    Default = Color3.fromRGB(255, 100, 100),
+    Callback = function(c) print("颜色", c) end,
+})
+```
+
+### TextBox 文本框
+
+```lua
+tab:TextBox({
+    Key = "name",
+    Name = "名字",
+    Default = "",
+    Callback = function(text) print("输入了", text) end,
+})
+```
+
+### Progress 进度条
+
+```lua
+local p = tab:Progress({ Name = "加载进度", Value = 0, Max = 100 })
+p.Set(50)   -- 更新到 50%
+```
+
+### Section / Label / Divider
+
+三个纯展示的：
+
+```lua
+tab:Section({ Name = "战斗" })       -- 分组标题
+tab:Label({ Name = "提示", Desc = "说明文字" })
+tab:Divider()                        -- 一条横线
+```
+
+### Buttons 按钮行
+
+```lua
+tab:Buttons({
+    Buttons = {
+        { Name = "保存", Callback = function() print("保存") end },
+        { Name = "重置", Callback = function() print("重置") end },
+    },
+})
+```
+
+### ClickableRow / RowButton
+
+整行可点，适合做"打开某某"的入口：
+
+```lua
+tab:ClickableRow({
+    Name = "打开设置",
+    Desc = "进入详细配置",
+    Arrow = true,
+    Callback = function() print("点了") end,
+})
+
+tab:RowButton({
+    Name = "立即执行",
+    Callback = function() print("执行") end,
+})
+```
+
+---
+
+## 事后操作控件
+
+每个控件都会登记到 `tab.Rows[Key]`，可以后面再操作：
+
+```lua
+tab.Rows.esp.Set(true)          -- 设置值，会触发回调
+tab.Rows.esp.SetSilent(true)    -- 只改界面，不触发
+local v = tab.Rows.esp.Get()    -- 读值
+```
+
+这个在做功能互斥时特别有用。比如 A 打开时要把 B 关掉：
+
+```lua
+tab:Toggle({
+    Key = "a", Name = "功能A",
+    Callback = function(v)
+        if v and win.State.b then
+            tab.Rows.b.SetSilent(false)   -- 界面关掉
+            win.State.b = false            -- 逻辑也关掉
+        end
     end,
 })
 ```
 
-内部兼容 `Color3.toHSV` / `Color3.fromHSV` 缺失的环境（自带 RGB↔HSV 转换）。
+---
 
-### TextBox — 文本输入
+## 换主题
 
-非数字的文本输入（数字请用 `Input`）。
-
-```lua
-tab:TextBox({
-    Key = "config_name",
-    Name = "配置名称",
-    Desc = "输入后回车",
-    Default = "",
-    Placeholder = "请输入名称",
-    Callback = function(text) print(text) end,
-})
-```
-
-### Progress — 进度条
-
-只读展示，用于加载进度、血量百分比等。
+在 `UI.Create` 之前改这些：
 
 ```lua
-local prog = tab:Progress({
-    Key = "load_progress",
-    Name = "加载进度",
-    Desc = "只读展示",
-    Value = 0.65,                 -- 0 ~ 1
-    Color = Color3.fromRGB(0, 200, 255),   -- 可选，默认白色
-})
-
--- 后续更新
-prog.Set(0.8)
+UI.Theme.panel   = Color3.fromRGB(15, 15, 18)
+UI.Theme.accent  = Color3.fromRGB(0, 170, 255)
+UI.Layout.panelH = 600
+UI.Size.radius   = 6
 ```
 
-### Section — 分组标题
+常用的几个字段：
 
-给控件分组，带下划细线。
+`UI.Theme` 里是颜色，`panel`（面板底）、`row`（行底）、`rowHover`（悬停）、`text`（主文字）、`textDim`（次要文字）、`accent`（强调色）、`ctrl`（控件底）、`ctrlStroke`（控件描边）。
 
-```lua
-tab:Section({ Name = "战斗设置" })
-tab:Toggle({ ... })
-tab:Toggle({ ... })
-tab:Section({ Name = "视觉设置" })
-tab:Toggle({ ... })
-```
+`UI.Layout` 是尺寸，`panelW`、`panelH`、`rowH`、`tabHeight`、`childH`。
 
-### Label — 文字说明
-
-```lua
-tab:Label({
-    Name = "标题",
-    Desc = "说明文字",
-})
-```
-
-### Divider — 分隔线
-
-```lua
-tab:Divider()
-```
-
-### Buttons — 按钮行
-
-```lua
-tab:Buttons({
-    Buttons = {
-        { Text = "取消", Variant = "secondary", Width = 80, Callback = function() end },
-        { Text = "确定", Variant = "primary",   Width = 80, Callback = function() end },
-    },
-})
-```
-
-按钮变体：
-
-| Variant | 外观 | 用途 |
-|---|---|---|
-| `"primary"` | 白底黑字 | 主要操作 |
-| `"secondary"` | 深灰底带描边 | 常规操作（默认） |
-| `"danger"` | 暗红底红字 | 危险操作 |
-| `"ghost"` | 极淡底 | 次要操作 |
+`UI.Size` 是圆角，`radius`、`radiusRow`、`checkbox`。
 
 ---
 
-## 使用场景
+## 动画和错误处理
 
-### 场景 1：纯开关面板
-
-最常见的情况 —— 一堆功能开关。
+动画接口开放了，可以自己做效果：
 
 ```lua
-local win = UI.Create({ Title = "功能面板" })
-local tab = win:Tab("功能")
-
-local features = {}
-
-local function addFeature(name, desc, key)
-    tab:Toggle({
-        Key = key,
-        Name = name,
-        Desc = desc,
-        Default = false,
-        Callback = function(v)
-            features[key] = v
-            print(name, v and "开启" or "关闭")
-        end,
-    })
-end
-
-addFeature("功能一", "第一个功能的说明", "feat1")
-addFeature("功能二", "第二个功能的说明", "feat2")
-addFeature("功能三", "第三个功能的说明", "feat3")
+UI.Anim.to(inst, props, dur, style, dir, delay)   -- 补间
+UI.Anim.cancel(inst)                               -- 取消该实例所有动画
+UI.Anim.snap(inst, props)                          -- 直接设到终态
 ```
 
-### 场景 2：带配置开关（开关 + 子配置）
+`Anim.to` 会自动取消同一实例同一属性上还在跑的旧动画，这个特性救过我很多次——之前做折叠功能，展开和收起的动画打架，导致"点了没反应"。
 
-开关本身需要一个数值配置时用 `Expand`。
+错误隔离也做了：
 
 ```lua
-tab:Expand({
-    Key = "aimbot",
-    Name = "自动瞄准",
-    Desc = "锁定视野内目标",
-    Default = false,
-    Callback = function(v) setAimbotEnabled(v) end,
-    Children = {
-        { Kind = "slider", Key = "aim_fov", Name = "瞄准范围",
-          Min = 10, Max = 180, Step = 5, Default = 90 },
-        { Kind = "cycle", Key = "aim_part", Name = "瞄准部位",
-          Options = { "头部", "身体", "最近" } },
-        { Kind = "toggle", Key = "aim_visible", Name = "仅可见目标", Default = true },
-    },
-})
+UI.safeCall(fn, ...)     -- 安全调用，出错不中断 UI
+UI.GetErrorStats()       -- 看错误统计
+UI.ClearErrors()         -- 清空
 ```
 
-子项的 Callback 需要在创建后单独挂：
+所有控件的回调都走 `safeCall`，所以某个功能写崩了不会把整个面板搞死。
+
+---
+
+## 重载
+
+反复 `loadstring` 是安全的。会自动做这几件事：
+
+先播退出动画（面板和顶栏按钮一起淡出），等动画播完再建新的，最后断开所有连接、还原鼠标 hook。
+
+手动清理的话：
 
 ```lua
--- Expand 的 Children 不支持直接写 Callback，
--- 用 win.State + 定时读，或者在外部监听
-local aimFov = win:Get("aim_fov")
-```
-
-> **提示**：如果需要子项实时回调，建议在 `win` 创建后手动接管：
-> ```lua
-> local origSet = win.Set
-> win.Set = function(self, key, value)
->     origSet(self, key, value)
->     if key == "aim_fov" then setFov(value) end
-> end
-> ```
-
-### 场景 3：多分页管理
-
-功能多的时候按类别分页。
-
-```lua
-local win = UI.Create({ Title = "多功能面板" })
-
-local combat = win:Tab("战斗")
-local visual = win:Tab("视觉")
-local misc   = win:Tab("杂项")
-
--- 战斗页
-combat:Expand({ Key = "aim", Name = "瞄准设置", Children = { ... } })
-combat:Toggle({ Key = "trigger", Name = "自动扳机", Default = false })
-
--- 视觉页
-visual:Toggle({ Key = "esp", Name = "透视", Default = false })
-visual:Toggle({ Key = "crosshair", Name = "准星", Default = true })
-
--- 杂项页
-misc:Slider({ Key = "volume", Name = "音量", Min = 0, Max = 100, Default = 100 })
-misc:Buttons({
-    Buttons = {
-        { Text = "全部关闭", Variant = "danger", Callback = function()
-            for _, key in ipairs({ "aim", "trigger", "esp", "crosshair" }) do
-                win:Set(key, false)
-            end
-        end },
-    },
-})
-```
-
-### 场景 4：配置持久化
-
-```lua
--- 保存
-local function saveConfig()
-    local cfg = {}
-    for key, _ in pairs(win.State) do
-        if type(key) == "string" and not key:find("^__") then
-            cfg[key] = win:Get(key)
-        end
-    end
-    writefile("my_config.json", game:GetService("HttpService"):JSONEncode(cfg))
-end
-
--- 加载
-local function loadConfig()
-    if not isfile("my_config.json") then return end
-    local cfg = game:GetService("HttpService"):JSONDecode(readfile("my_config.json"))
-    for key, value in pairs(cfg) do
-        win:Set(key, value)
-    end
-end
-
--- 在 Buttons 里调用
-tab:Buttons({
-    Buttons = {
-        { Text = "保存", Variant = "primary", Callback = saveConfig },
-        { Text = "加载", Variant = "secondary", Callback = loadConfig },
-    },
-})
-```
-
-### 场景 5：动态更新控件状态
-
-```lua
--- 代码里改变某个开关的状态（比如检测到条件满足时自动开启）
-win:Set("my_toggle", true)
-
--- 对应的 Callback 不会被触发，
--- 如果需要触发回调，手动调用
-_G._MyCallbacks["my_toggle"](true)
+if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
 ```
 
 ---
 
-## 移动端适配
+## 踩过的坑
 
-库自动检测设备，无需手动配置：
+这部分是重点。下面每一条都是我实际遇到过的问题，写新脚本的时候照着避就行。
+
+**Cycle 的回调第一个参数是索引，不是文字。**
 
 ```lua
-local IS_TOUCH = UserInputService.TouchEnabled
-local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
+-- 对的
+Callback = function(idx, text) end
+
+-- 错的，text 拿到的是数字
+Callback = function(text) end
 ```
 
-（与 Roblox 官方判断一致：有触摸且没有键盘才算移动端）
-
-### 自动调整的项
-
-| 项 | PC | 移动端 |
-|---|---|---|
-| 面板尺寸 | 460 × 580 | 560 × 620 |
-| 行高 | 58 | 72 |
-| 标题字号 | 30 | 34 |
-| Tab 高 | 44 | 52 |
-| 行标题 / 描述 | 14 / 12 | 16 / 13 |
-| 勾选框 | 28 | 32 |
-| 展开箭头 | 34 | 38 |
-| 输入框 | 70 × 30 | 84 × 36 |
-| 滑动条 | 150 × 6 | 170 × 8 |
-| 循环按钮 | 160 × 28 | 190 × 32 |
-| 键位按钮 | 110 × 28 | 130 × 34 |
-| 多选 chip | 64 × 24 | 76 × 30 |
-| 控件字号 | 12 | 14 |
-
-### 移动端专属行为
-
-- **滚动条加粗** 到 6px，透明度降低
-- **惯性滚动** 开启（`ElasticBehavior.WhenScrollable`）
-- **拖动标题栏移动面板**（移动端没鼠标，这是必要功能）
-- **Tab 平分整行**，不留空白
-
-### 自定义尺寸
-
-`UI.Layout` 里的字段在**创建控件时**读取，所以修改必须发生在 `UI.Create` 之前：
+**Expand 子项必须写 Kind。** 支持 `toggle`、`cycle`、`number`、`slider` 四种。漏写的话子项不报错也不显示，很难查。
 
 ```lua
-local UI = loadstring(game:HttpGet("..."))()
+-- 对的
+{ Kind = "toggle", Key = "c1", Name = "开关", Callback = fn }
 
--- 必须在 UI.Create 之前修改
-UI.Layout.panelW = 520
-UI.Layout.panelH = 640
-UI.Layout.rowH = 64
-
-local win = UI.Create({ Title = "面板" })
+-- 错的，会静默消失
+{ Key = "c1", Name = "开关", Callback = fn }
 ```
 
-已创建的控件不会跟随变化，需要重建面板。
-
-可改的字段见源码里 `LAYOUT` 表的定义，全部是纯数字，直接赋值即可。
-
-## 主题与自定义
-
-### 修改颜色
+**Cycle 子项的默认值要用 DefaultIndex。** 写 `Default` 是无效的，界面永远显示第一项。
 
 ```lua
-local UI = loadstring(game:HttpGet("..."))()
-
--- 直接改主题表（在 UI.Create 之前）
-local T = UI.Theme
-T.accent = Color3.fromRGB(100, 200, 255)   -- 强调色（原白色）
-T.row = Color3.fromRGB(30, 30, 38)         -- 行背景
-T.text = Color3.fromRGB(255, 255, 255)     -- 主文字色
-```
-
-### 内置主题色字段
-
-| 字段 | 默认值 | 用途 |
-|---|---|---|
-| `panel` | `15,15,18` | 面板背景 |
-| `row` | `25,25,30` | 行背景 |
-| `rowChild` | `21,21,26` | 子项行背景 |
-| `text` | `240,240,245` | 主文字 |
-| `textDim` | `130,130,140` | 次要文字 |
-| `accent` | `255,255,255` | 强调色（勾选 / 滑条 / Tab） |
-| `ctrl` | `38,38,45` | 控件底色 |
-| `danger` | `226,96,96` | 危险色 |
-
-### 动画接口
-
-```lua
-local Anim = UI.Anim
-
--- 基础补间
-Anim.to(instance, { Property = value }, 0.2, Enum.EasingStyle.Quad)
-
--- 悬停效果
-Anim.hover(frame, fromColor, toColor)
-
--- 按钮按压
-Anim.press(button, 0.95)
-```
-
----
-
-## 接入新脚本必读
-
-这 10 条都是实际踩过的坑，能避免 90% 的集成问题。
-
-### ① Cycle 回调第一个参数是索引
-
-```lua
--- 正确
-tab:Cycle({ ..., Callback = function(idx, text) end })
-
--- 错误：text 收到的是数字
-tab:Cycle({ ..., Callback = function(text) end })
-```
-
-### ② Expand 子项必须写 Kind
-
-```lua
--- 正确
-Children = {
-    { Kind = "toggle", Key = "c1", Name = "开关", Callback = fn },
-}
-
--- 错误：不写 Kind 会被静默忽略（不报错、不显示）
-Children = {
-    { Key = "c1", Name = "开关", Callback = fn },
-}
-```
-
-支持的 Kind：`toggle` / `cycle` / `number` / `slider`
-
-### ③ Cycle 子项默认值用 DefaultIndex
-
-```lua
--- 正确
+-- 对的
 { Kind = "cycle", Options = {"A","B"}, DefaultIndex = 2 }
 
--- 错误：Default 无效，UI 永远显示第 1 项
+-- 错的
 { Kind = "cycle", Options = {"A","B"}, Default = 2 }
 ```
 
-### ④ Body2D 默认收起
+**Body2D 默认收起。** 点标题行或者箭头才展开。`Callback` 收到的是选中的 Key（数字）。
 
-点标题行或箭头展开。`Callback` 收到的是选中的 Key（数字）。
-
-### ⑤ 自制按钮用 bindTap
+**自己做按钮的话用 bindTap。** 直接连 `MouseButton1Click` 是没音效的。
 
 ```lua
--- 正确：有点击音效
-bindTap(btn, function() ... end)
-
--- 错误：没有音效
-btn.MouseButton1Click:Connect(function() ... end)
+bindTap(btn, function() ... end)              -- 有音效
+btn.MouseButton1Click:Connect(function() end) -- 没音效
 ```
 
-### ⑥ 外部同步用 SetSilent
+**外部同步界面用 SetSilent。** 用 `Set` 会触发回调，容易递归。
 
 ```lua
--- 正确：只更新界面，不触发 Callback，不会死循环
-win:SetSilent("key", value)
-
--- 注意：会触发 OnToggle，可能引起递归
-win:Set("key", value)
+win:SetSilent("key", value)   -- 只改界面
+win:Set("key", value)         -- 改界面 + 触发回调
 ```
 
-### ⑦ 反复重载是安全的
+**反复重载没问题。** `cleanup` 会断开连接、播动画、延迟销毁，还会把临时钩子还原。
 
-`cleanup` 会断开连接、播退出动画、延迟销毁，并还原所有临时钩子。
+**鼠标 hook 是全局单例。** 用引用计数管理，最后一个窗口销毁时才真正卸载 `__newindex`。
 
-### ⑧ 鼠标 hook 是全局单例
-
-采用引用计数，最后一个窗口销毁时才真正卸载 `__newindex`。
-
-### ⑨ 不要覆盖内部状态
+**别动这几个内部状态。**
 
 ```lua
--- 不要动这些
 _G._CDMUILastCleanup
 _G._CDMUILiveWindows
 _G._CDMUIRunGen
-
--- 需要清理时用
-win:Destroy()
 ```
 
-### ⑩ Key 在同一 Tab 内必须唯一
+要清理就调 `win:Destroy()`。
 
-重复会打警告并覆盖前一个。不同 Tab 之间可以同名。
+**同一个 Tab 里 Key 不能重复。** 重复会打警告，然后后者覆盖前者。不同 Tab 之间可以同名。
+
+---
+
+## 参数速查
+
+所有控件都吃 `Key`、`Name`、`Desc` 这三个通用字段，下面只列专属的。
+
+| 控件 | 专属参数 | 回调 |
+|---|---|---|
+| Toggle | `Default` | `(bool)` |
+| Slider | `Min`, `Max`, `Default` | `(number)` |
+| Cycle | `Options`, `DefaultIndex` | `(idx, text)` |
+| Input | `Default`, `Min`, `Max` | `(string)` |
+| Keybind | `Default` | `(keyCode)` |
+| MultiSelect | `Options`, `Default` | `(table)` |
+| Expand | `Default`, `Children`, `Cycle` | `(bool)` |
+| Body2D | `Default`, `Parts` | `(idx)` |
+| Dropdown | `Options`, `Default` | `(string)` |
+| ColorPicker | `Default` | `(Color3)` |
+| TextBox | `Default` | `(string)` |
+| Progress | `Value`, `Max` | — |
+| Section | 只有 `Name` | — |
+| Label | `Name`, `Desc` | — |
+| Divider | 无 | — |
+| Buttons | `Buttons` | 各自 `()` |
+| ClickableRow | `Arrow` | `()` |
+| RowButton | 只有 `Name` | `()` |
+
+Expand 子项的参数：
+
+| Kind | 专属参数 | 回调 |
+|---|---|---|
+| toggle | `Default` | `(bool)` |
+| number | `Min`, `Max`, `Default` | `(number)` |
+| cycle | `Options`, `DefaultIndex` | `(idx)` |
+| slider | `Min`, `Max`, `Default` | `(number)` |
 
 ---
 
 ## 常见问题
 
-**Q: 面板和游戏按键冲突怎么办？**
+**控件加进去了但看不见？**
 
-不设 `ToggleKey`，用左上角按钮开关：
+大概率是 Key 写错了，或者 Expand 子项漏了 `Kind`。先检查 `tab.Rows` 里有没有这个 key：
+
 ```lua
-local win = UI.Create({
-    Title = "面板",
-    TopbarText = "设置",     -- 左上角按钮
-    -- 不传 ToggleKey
-})
+for k, v in pairs(tab.Rows) do print(k) end
 ```
 
-**Q: 如何隐藏左上角按钮？**
+**回调不触发？**
+
+`win:Set()` 默认会触发回调，`win:SetSilent()` 不会。如果你用的是 `SetSilent` 那当然不触发。用户点 UI 的时候一定触发。
+
+**改了 Key 之后状态丢了？**
+
+Key 是状态的唯一标识，改了就相当于新控件。发布之后最好别改。
+
+**面板挡住了游戏画面？**
+
+改 `DisplayOrder` 调层级，或者用 `win:SetVisible(false)` 关掉。
+
+**多个脚本都想用这个库，会冲突吗？**
+
+会。`_G._CDMUILiveWindows` 是全局的，重复加载会互相干扰。建议一个脚本只建一个面板。
+
+---
+
+## 出问题怎么查
+
+**面板没出来**
 
 ```lua
-local win = UI.Create({
-    Title = "面板",
-    TopbarText = false,      -- 不创建按钮
-    AutoOpen = true,         -- 直接显示
-})
+print(getgenv().ExaminationWin)   -- 或者你自己的窗口变量
+print(#win.Tabs)                  -- 分页数
 ```
 
-**Q: 修改了控件的 Key 后状态丢失？**
+如果是 nil，说明 `UI.Create` 没执行成功，往前找报错。
 
-`Key` 是状态的唯一标识，改了 Key 就等于新控件，旧状态不会迁移。建议发布后不要改 Key。
-
-**Q: Callback 不触发？**
-
-- 用 `win:Set()` 设置时**不会**触发 Callback（设计如此，避免循环）
-- 只有用户点 UI 时才触发
-
-**Q: 子项（Expand 里的 Children）怎么加 Callback？**
-
-`Children` 数组目前不支持直接写 `Callback` 字段。需要回调时：
+**控件状态不对**
 
 ```lua
--- 方案：创建后手动接管 setter
-local originalSet = _G._ExamSetters["sub_key"]
-_G._ExamSetters["sub_key"] = function(v)
-    if originalSet then originalSet(v) end
-    -- 你的回调逻辑
+print(win.State["your_key"])           -- 逻辑层的值
+print(tab.Rows["your_key"].Get())      -- 界面显示的值
+```
+
+两个不一致就说明同步出了问题。正常情况下 `State` 是权威，界面应该跟着它走。
+
+**报错被吞了**
+
+所有回调都包了 `pcall`，报错不会中断 UI，但也可能被忽略。可以看错误统计：
+
+```lua
+local stats = UI.GetErrorStats()
+print(stats.count, stats.last)
+```
+
+**检查内部有没有崩**
+
+```lua
+-- 看所有分页的控件数量
+for i, tb in ipairs(win.Tabs) do
+    local n = 0
+    for _ in pairs(tb.Rows or {}) do n = n + 1 end
+    print(i, tb.Name, n)
 end
-```
-
-**Q: 移动端适配需要额外做什么？**
-
-不需要。库会自动检测：
-```lua
-local IS_MOBILE = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
-```
-移动端会自动放大点击区域、Tab 平分整行、支持拖动标题栏移动面板。
-
-**Q: 面板挡住了游戏 UI？**
-
-调整 `DisplayOrder`：
-```lua
-local win = UI.Create({ DisplayOrder = 50 })   -- 数值越小越靠后
 ```
 
 ---
 
-## 调试与故障排查
-
-### 检查面板是否加载
+## 清理
 
 ```lua
-local win = getgenv().MyWin
-print(win ~= nil)
-print(#win.Tabs)          -- Tab 数量
+win:Destroy()                        -- 销毁当前窗口
 ```
 
-### 检查控件状态
+或者清掉所有残留：
 
 ```lua
-print(win.State)          -- 全部状态表
-print(win:Get("my_key"))  -- 单个值
+if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
 ```
 
-### 检查控件是否创建
+`Destroy` 会断开所有连接、销毁所有实例、释放鼠标 hook。重载前不用手动调，新的一次加载会自动处理旧的。
 
-```lua
-for _, tab in ipairs(win.Tabs) do
-    print("Tab:", tab.Name)
-    for _, w in ipairs(tab.Widgets) do
-        local title = w:FindFirstChild("Title") or w:FindFirstChild("ChildTitle")
-        print("  ", w.Name, title and title.Text or "")
-    end
-end
-```
+---
 
-### 常见错误
+## 手机端
 
-| 错误 | 原因 | 解决 |
-|---|---|---|
-| `attempt to call nil (field 'Create')` | 库没加载成功 | 检查 `HttpGet` 是否返回内容 |
-| `attempt to index nil with 'Parent'` | 面板已销毁但循环还在跑 | 循环里加 `win.Parent` 或状态检查 |
-| Tab 点击没反应 | `bindTap` 位移阈值 12px | 检查是否被其他 UI 覆盖 |
-| 控件不显示 | `Visible` 为 false | 切到对应 Tab 再看 |
+自动检测（`TouchEnabled` 且没有 `KeyboardEnabled`），尺寸会放大一圈：
 
-### 安全销毁
+行高从 76 变成 88，Tab 高从 54 变成 62，字号加 2，滚动条从 3px 到 5px。退出动画也长一点（0.28s 对 0.24s），拖动阈值小一点（12px 对 18px），手指滑动更容易触发。
 
-```lua
--- 会断开所有连接、销毁所有实例
-win:Destroy()
-```
+---
 
-销毁后再调用任何方法都会静默失败（内部有 `Destroyed` 检查）。
+## 版本
 
-### 避免内存泄漏
+当前 1.6.0。这一版做了几件事：
 
-长时间运行的脚本，闭包里的连接需要手动管理：
+`Anim` 加了动画冲突管理，同一属性上的新动画会自动取消旧的。`UI.safeCall` 做了错误隔离，回调抛错不再中断 UI。`State` 统一成唯一数据源，`Set` / `SetSilent` / `SetMany` / `RepaintAll` 都基于它。加了 `registerControl` 做注册校验，key 冲突会警告。抽出 `makeFoldable` 折叠基类，Expand 和 Body2D 共用一套逻辑。`SelectTab` 的两个分支合并了，之前改一处忘另一处出过好几次问题。
 
-```lua
--- 错误：每次调用都新增连接
-RunService.Heartbeat:Connect(function() ... end)
+修的 bug 也不少：折叠收不起来（`apply` 写 State 覆盖了用户选择）、切页后折叠状态错乱（动画分支没调 `setPage`）、点击触发两次切换（`RowHit` 盖住了箭头区域）、顶栏按钮消失和变白（误删了函数和常量）、Tab 滚动条消失（动画隐藏后没恢复）。
 
--- 正确：只建一次，或者销毁时断开
-local conn
-if not conn then
-    conn = RunService.Heartbeat:Connect(function() ... end)
-end
+更早的版本：
 
-win:Destroy()  -- 记得清理
-```
+1.5.0 给 `bindTap` 内置了音效，所有控件自动有点击声；Body2D 修正成 R6 比例并支持折叠。
+
+1.4.x 做了退出动画和入场动画，还处理了鼠标状态记录与还原。
+
+1.3.x 把 Tab 栏改成横向滚动，支持拖动。
+
+---
 
 ## 许可
 
