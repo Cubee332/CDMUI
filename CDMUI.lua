@@ -1,5 +1,5 @@
 --[[
-    CDMUI 1.4.9
+    CDMUI 1.5.0
     Roblox 控制面板 UI 库 — 单文件，无外部依赖，支持 PC / 手机
 
     ────────────────────────────────────────────────────────────
@@ -155,8 +155,48 @@
     3. 面板挂在 CoreGui 里，模拟点击（VirtualInputManager）打不到，
        只能用真实鼠标/手指操作。
     4. 手机端判断用 IS_MOBILE，相关尺寸在 LAYOUT 里已经放大过。
+
+    ────────────────────────────────────────────────────────────
+    接入新脚本必读（踩过的坑）
+    ────────────────────────────────────────────────────────────
+    ① Cycle / Expand.Cycle 的回调，第一个参数是【索引数字】。
+       写成 function(text) 会拿到数字，判断全失效。
+       本库内部统一：Callback(idx, text)。
+
+    ② Expand 的 Children 必须写 Kind 字段，支持四种：
+           toggle / cycle / number / slider
+       写了别的 Kind 或漏写，子项会被静默忽略（不报错、不显示）。
+
+    ③ 子项 toggle 没有 Kind 时不会被当成开关，必须显式写
+           { Kind = "toggle", Key = "k", Name = "开关", Callback = ... }
+
+    ④ 想要控件"默认值"和显示一致，Cycle 子项必须写 DefaultIndex：
+           { Kind = "cycle", ..., Options = {"A","B"}, DefaultIndex = 2 }
+       只写 Default 不会生效。
+
+    ⑤ Body2D 是折叠控件，默认收起，点标题行或箭头展开。
+       参数：Key / Name / Desc / Default / Callback(idx) / Parts
+       Parts = { { Key = 1, Name = "头部" }, ... }
+       Callback 收到的是选中的 Key（数字）。
+
+    ⑥ 所有可点击元素的音效由 bindTap 统一播放。
+       自己做按钮时请用 bindTap(btn, fn)，不要直接连 MouseButton1Click，
+       否则没有点击音效。确实要连的话手动调 playClick()。
+
+    ⑦ 控件的值都存在 window.State[key]。
+       外部想同步界面用 tab.Rows[key].SetSilent(v)，
+       它会更新显示但【不】触发 Callback，避免死循环。
+
+    ⑧ 反复重载是安全的：cleanup 会断开连接、播退出动画、延迟销毁，
+       并把 __newindex 之类的临时钩子完全还原。
+
+    ⑨ 鼠标锁定：游戏常会每帧强推 MouseBehavior，本库用 hook 稳住。
+       hook 是全局单例 + 引用计数，最后一个窗口销毁时才真正卸载。
+
+    ⑩ 不要在自己脚本里覆盖 _G._CDMUILastCleanup / _G._CDMUILiveWindows，
+       那是库的内部状态；需要清理时调 window:Destroy()。
 --]]
--- CDMUI v1.4.9  悬停屏蔽改为每行独立，滑到位即恢复
+-- CDMUI v1.5.0  bindTap 内置音效；Body2D 修正 R6 比例+折叠；补全接入文档与坑位说明
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -169,7 +209,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.4.9"
+UI.Version = "1.5.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -409,13 +449,13 @@ local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
 local LAYOUT = {
     panelW      = IS_MOBILE and 540 or 540,
     panelH      = IS_MOBILE and 620 or 600,
-    rowH        = IS_MOBILE and 82 or 68,
+    rowH        = IS_MOBILE and 88 or 76,
     titleSize   = IS_MOBILE and 36 or 32,
-    tabHeight   = IS_MOBILE and 56 or 48,
+    tabHeight   = IS_MOBILE and 62 or 54,
     tabWidth    = IS_MOBILE and 0 or 88,      -- 0 = 平分整行
-    tabTextSize = IS_MOBILE and 18 or 16,
-    rowTitle    = IS_MOBILE and 19 or 17,
-    rowDesc     = IS_MOBILE and 16 or 14,
+    tabTextSize = IS_MOBILE and 21 or 19,
+    rowTitle    = IS_MOBILE and 22 or 20,
+    rowDesc     = IS_MOBILE and 19 or 17,
     boxSize     = IS_MOBILE and 32 or 28,
     inputW      = IS_MOBILE and 84 or 70,
     inputH      = IS_MOBILE and 36 or 30,
@@ -425,7 +465,7 @@ local LAYOUT = {
     listTop     = IS_MOBILE and 146 or 130,
     padX        = IS_MOBILE and 16 or 20,
     padGap      = IS_MOBILE and 8 or 6,
-    childH      = IS_MOBILE and 44 or 36,
+    childH      = IS_MOBILE and 48 or 42,
 
     -- 控件尺寸
     sliderW     = IS_MOBILE and 170 or 150,   -- 滑动条轨道宽
@@ -433,13 +473,13 @@ local LAYOUT = {
     knobSize    = IS_MOBILE and 18 or 14,     -- 拖柄直径
     keybindW    = IS_MOBILE and 130 or 110,   -- 键位按钮宽
     keybindH    = IS_MOBILE and 34 or 28,     -- 键位按钮高
-    cycleW      = IS_MOBILE and 190 or 160,   -- 循环选择宽
-    cycleH      = IS_MOBILE and 32 or 28,     -- 循环选择高
+    cycleW      = IS_MOBILE and 195 or 172,   -- 循环选择宽（字变大了跟着加宽）
+    cycleH      = IS_MOBILE and 36 or 32,     -- 循环选择高
     chipW       = IS_MOBILE and 76 or 64,     -- 多选 chip 宽
     chipH       = IS_MOBILE and 30 or 24,     -- 多选 chip 高
-    ctrlText    = IS_MOBILE and 14 or 12,     -- 控件字号
+    ctrlText    = IS_MOBILE and 16 or 15,     -- 控件字号（PC 上原来 12 太小）
     arrowSize   = IS_MOBILE and 38 or 34,     -- 展开箭头
-    rowDescY    = IS_MOBILE and 38 or 34,     -- 行描述文字 Y 偏移
+    rowDescY    = IS_MOBILE and 42 or 38,     -- 行描述文字 Y 偏移
     tabY        = IS_MOBILE and 84 or 74,     -- Tab 栏 Y 位置
     tabItemW    = IS_MOBILE and 100 or 88,    -- 单个 Tab 宽
     cycleArrowW = IS_MOBILE and 30 or 24,     -- 循环按钮两侧箭头宽
@@ -543,7 +583,11 @@ local function bindTap(btn, fn)
             if ok and type(mag) == "number" then moved = mag end
         end
         startPos = nil
-        if moved < 12 then fn() end
+        if moved < 12 then
+            -- 统一在这里放音效，所有走 bindTap 的控件自动都有声音
+            playClick()
+            fn()
+        end
     end)
 end
 
@@ -825,7 +869,6 @@ local function makeButton(parent, cfg)
         tween(btn, 0.1, { Size = UDim2.new(0, w, 0, h) }, Enum.EasingStyle.Back)
     end)
     bindTap(btn, function()
-        playClick()
         if cfg.Callback then cfg.Callback() end
     end)
 
@@ -1148,7 +1191,6 @@ local function createTopbarButton(self, labelText)
     end
 
     bindTap(click, function()
-        playClick()
         if self.Visible then self._closedByTopbar = true end
         self:SetVisible(not self.Visible)
         if self.TopbarSetActive then self.TopbarSetActive(self.Visible) end
@@ -1189,6 +1231,7 @@ end
 -- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
 local function bindShieldClose(self)
     self.Shield.MouseButton1Click:Connect(function()
+        playClick()
         -- 加载动画期间不许关
         if self.Busy then return end
 
@@ -3087,7 +3130,8 @@ function Window:SelectTab(index, instant)
     -- 整页切换到 显示/隐藏 状态
     local function setPage(t, visible)
         for _, w in ipairs(t.Widgets) do
-            if w and w.Parent and w.Name ~= "ChildRow" then
+            -- BodyChildRow 自己管理显隐，不能被切页重置
+            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
                 local base = rememberBase(w)
                 w.Visible = visible
                 w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, visible and base or 0)
@@ -3103,6 +3147,22 @@ function Window:SelectTab(index, instant)
                     r.apply(r.get() == true, false)
                 else
                     r.apply(false, false)
+                end
+            end
+        end
+
+        -- 兜底：再扫一遍 BodyChildRow，确保 Visible 跟展开状态一致
+        for _, w in ipairs(t.Widgets) do
+            if w and w.Parent and w.Name == "BodyChildRow" then
+                local ek = w:GetAttribute("__expandKey")
+                local open = (ek ~= nil) and (self.State[ek] == true)
+                local h = w:GetAttribute("__h") or 0
+                if visible == true and open then
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, h)
+                    w.Visible = true
+                else
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
+                    w.Visible = false
                 end
             end
         end
@@ -3135,7 +3195,7 @@ function Window:SelectTab(index, instant)
     -- 收集旧页可见行
     local oldRows = {}
     for _, w in ipairs(oldTab.Widgets) do
-        if w and w.Parent and w.Visible and w:IsA("Frame") then
+        if w and w.Parent and w.Visible and w:IsA("Frame") and w.Name ~= "BodyChildRow" then
             rememberBase(w)
             table.insert(oldRows, w)
         end
@@ -3173,7 +3233,7 @@ function Window:SelectTab(index, instant)
         -- 新页：先全部 0 高度 + 可见，再逐行撑开
         local newRows = {}
         for _, w in ipairs(tab.Widgets) do
-            if w and w.Parent and w.Name ~= "ChildRow" then
+            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
                 local base = rememberBase(w)
                 w.Visible = true
                 w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
@@ -3212,6 +3272,27 @@ function Window:SelectTab(index, instant)
                 end
             end
         end
+
+        -- 全都撑开后再走一次兜底，确保 BodyChildRow 之类自管理显隐的行状态正确
+        task.delay(showDelay + EXPAND_TIME + 0.05, function()
+            if self.Destroyed or self.TabIndex ~= index then return end
+            pcall(function()
+                for _, w in ipairs(tab.Widgets) do
+                    if w and w.Parent and w.Name == "BodyChildRow" then
+                        local ek = w:GetAttribute("__expandKey")
+                        local open = (ek ~= nil) and (self.State[ek] == true)
+                        local h = w:GetAttribute("__h") or 0
+                        if open then
+                            w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, h)
+                            w.Visible = true
+                        else
+                            w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
+                            w.Visible = false
+                        end
+                    end
+                end
+            end)
+        end)
         end)
     end)
 end
@@ -3236,7 +3317,7 @@ function Window:Notify(text, duration)
         BackgroundTransparency = 1,
         Font = FONT,
         Text = text,
-        TextSize = 13,
+        TextSize = 15,
         TextColor3 = T.text,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextTruncate = Enum.TextTruncate.AtEnd,
@@ -3273,6 +3354,9 @@ function Window:Set(key, value)
 end
 
 function Window:Destroy()
+    -- 清理切页恢复器，避免重载时泄漏
+    self.ExpandRestorers = {}
+
     -- 从全局登记表移除
     if type(_G._CDMUILiveWindows) == "table" then
         for i = #_G._CDMUILiveWindows, 1, -1 do
@@ -3342,17 +3426,55 @@ local function baseRow(tab, height)
     return row
 end
 
+-- 标题 / 描述：按是否有描述决定垂直位置
+--   没有描述 -> 整行垂直居中
+--   有描述   -> 标题略上、描述略下，整体在行内居中
+local function layoutRowText(row)
+    local title = row:FindFirstChild("Title")
+    local desc = row:FindFirstChild("Desc")
+    if not title then return end
+
+    -- 用行的实际高度算，不用固定偏移，
+    -- 行高改了也不会偏
+    local rowH = row.Size.Y.Offset
+    if rowH <= 0 then rowH = LAYOUT.rowH end
+
+    local titleH = math.floor(LAYOUT.rowTitle * 1.45)
+    local descH = math.floor(LAYOUT.rowDesc * 1.45)
+
+    if desc then
+        -- 两行：上下段垂直分布，整体居中
+        local gap = 2
+        local totalH = titleH + gap + descH
+        local top = math.max(0, (rowH - totalH) / 2)
+
+        title.Size = UDim2.new(1, -80, 0, titleH)
+        title.Position = UDim2.new(0, 12, 0, top)
+        title.TextYAlignment = Enum.TextYAlignment.Top
+
+        desc.Size = UDim2.new(1, -80, 0, descH)
+        desc.Position = UDim2.new(0, 12, 0, top + titleH + gap)
+        desc.TextYAlignment = Enum.TextYAlignment.Top
+    else
+        -- 单行：整行垂直居中
+        title.Size = UDim2.new(1, -80, 1, 0)
+        title.Position = UDim2.new(0, 12, 0, 0)
+        title.TextYAlignment = Enum.TextYAlignment.Center
+    end
+end
+
 local function addTitle(row, data, offset)
     mk("TextLabel", {
         Name = "Title",
-        Size = UDim2.new(1, -80, 0, 24),
-        Position = UDim2.new(0, 12, 0, offset or 8),
+        Size = UDim2.new(1, -80, 0, 26),
+        Position = UDim2.new(0, 12, 0.5, -20),
         BackgroundTransparency = 1,
         Text = data.Name or data.name or data.Title or data.title or "",
         TextColor3 = T.text,
         Font = FONT_BOLD,
         TextSize = LAYOUT.rowTitle,
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
         ZIndex = 5,
         Active = false,
     }, row)
@@ -3360,20 +3482,25 @@ end
 
 local function addDesc(row, data, y)
     local desc = data.Desc or data.desc or data.Description
-    if not desc then return end
+    if not desc then
+        layoutRowText(row)
+        return
+    end
     mk("TextLabel", {
         Name = "Desc",
-        Size = UDim2.new(1, -80, 0, 20),
-        Position = UDim2.new(0, 12, 0, y or 30),
+        Size = UDim2.new(1, -80, 0, 22),
+        Position = UDim2.new(0, 12, 0.5, 6),
         BackgroundTransparency = 1,
         Text = desc,
         TextColor3 = T.textDim,
         Font = FONT,
         TextSize = LAYOUT.rowDesc,
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
         ZIndex = 5,
         Active = false,
     }, row)
+    layoutRowText(row)
 end
 
 function Tab:Toggle(cfg)
@@ -3643,7 +3770,6 @@ function Tab:Expand(cfg)
         end
 
         bindTap(cycBtn, function()
-            playClick()
             apply(idx + 1)
         end)
 
@@ -3728,7 +3854,7 @@ function Tab:Expand(cfg)
             Text = child.Name or child.name or "",
             TextColor3 = T.textChild,
             Font = FONT,
-            TextSize = 13,
+            TextSize = IS_MOBILE and 18 or 16,
             TextXAlignment = Enum.TextXAlignment.Left,
             ZIndex = 6,
             Active = false,
@@ -3777,7 +3903,7 @@ function Tab:Expand(cfg)
                 Text = tostring(child.Default or 0),
                 TextColor3 = T.text,
                 Font = FONT_BOLD,
-                TextSize = 11,
+                TextSize = 14,
                 TextXAlignment = Enum.TextXAlignment.Right,
                 ZIndex = 6,
             }, sh)
@@ -3870,7 +3996,7 @@ function Tab:Expand(cfg)
                 Text = tostring(child.Default or child.min or 1),
                 TextColor3 = T.text,
                 Font = FONT,
-                TextSize = 13,
+                TextSize = 14,
                 TextXAlignment = Enum.TextXAlignment.Center,
                 ClearTextOnFocus = false,
                 ZIndex = 21,
@@ -3895,7 +4021,12 @@ function Tab:Expand(cfg)
         elseif kind == "cycle" then
             -- 加宽的切换按钮：单键循环，整块可点，移动端也好按
             local options = child.Options or { "选项1", "选项2" }
-            local idx = self.Window.State[ckey] or 1
+            -- 支持 DefaultIndex：否则永远从第 1 项开始，和实际状态对不上
+            local idx = self.Window.State[ckey]
+            if type(idx) ~= "number" then
+                idx = child.DefaultIndex or child.Default or 1
+            end
+            idx = math.clamp(idx, 1, #options)
             local cyc = mk("TextButton", {
                 Name = "Cycle",
                 Size = UDim2.new(0, LAYOUT.cycleW, 0, LAYOUT.cycleH),
@@ -4190,7 +4321,7 @@ function Tab:Slider(cfg)
         Text = tostring(value),
         TextColor3 = T.text,
         Font = FONT_BOLD,
-        TextSize = 12,
+        TextSize = 14,
         TextXAlignment = Enum.TextXAlignment.Right,
         ZIndex = 6,
     }, holder)
@@ -4382,6 +4513,7 @@ end
 --     头部 1.0 : 躯干 2.0 宽 x 2.0 高 : 手臂 1.0 x 2.0 : 腿 1.0 x 2.0
 -- 视觉上接近 Roblox 默认角色。
 function Tab:Body2D(cfg)
+    local key = cfg.Key or cfg.key
     local parts = cfg.Parts or {
         { Key = 1, Name = "头部" },
         { Key = 2, Name = "躯干" },
@@ -4391,88 +4523,79 @@ function Tab:Body2D(cfg)
         { Key = 6, Name = "右腿" },
     }
 
-    local row = mk("Frame", {
-        Name = "BodyRow",
-        Size = UDim2.new(1, -12, 0, 260),
-        BackgroundColor3 = T.row,
-        BackgroundTransparency = 0.15,
-        BorderSizePixel = 0,
-        ClipsDescendants = true,
-        ZIndex = 4,
-        Active = false,
-        LayoutOrder = (self.Items + 1) * 1000,
-        Visible = (self.Window.TabIndex == #self.Window.Tabs),
-    }, self.Container)
-    corner(row, SIZE.radiusRow)
-    self.Items = self.Items + 1
-    table.insert(self.Widgets, row)
-
-    local key = cfg.Key or cfg.key
     local selected = cfg.Default or 1
     self.Window.State[key] = selected
 
-    mk("TextLabel", {
-        Name = "Title",
-        Size = UDim2.new(1, -100, 0, 22),
-        Position = UDim2.new(0, 12, 0, 8),
-        BackgroundTransparency = 1,
-        Text = cfg.Name or cfg.name or cfg.Title or "",
-        TextColor3 = T.text,
+    -- ===== 主行：和 Expand 一样，标题 + 描述 + 箭头 =====
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    -- 右侧箭头
+    local ARROW_W = LAYOUT.arrowSize
+    local arrowBtn = mk("TextButton", {
+        Name = "Arrow",
+        Size = UDim2.fromOffset(ARROW_W, ARROW_W),
+        Position = UDim2.new(1, -(ARROW_W + 8), 0.5, -ARROW_W / 2),
+        BackgroundColor3 = T.arrowBg,
+        Text = "▼",
+        TextColor3 = T.arrowText,
         Font = FONT_BOLD,
-        TextSize = LAYOUT.rowTitle,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 5,
-        Active = false,
+        TextSize = 14,
+        AutoButtonColor = false,
+        ZIndex = 20,
+        Active = true,
     }, row)
+    corner(arrowBtn, 6)
+    stroke(arrowBtn, T.ctrlStroke, 1, 0.5)
 
-    mk("TextLabel", {
-        Name = "Desc",
-        Size = UDim2.new(1, -100, 0, 18),
-        Position = UDim2.new(0, 12, 0, 30),
-        BackgroundTransparency = 1,
-        Text = cfg.Desc or cfg.desc or "",
-        TextColor3 = T.textDim,
-        Font = FONT,
-        TextSize = LAYOUT.rowDesc,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 5,
-        Active = false,
-    }, row)
-
-    -- 当前选中提示
-    local info = mk("TextLabel", {
-        Name = "Info",
-        Size = UDim2.new(0, 100, 0, 20),
-        Position = UDim2.new(1, -112, 0, 12),
-        BackgroundTransparency = 1,
-        Text = "",
-        TextColor3 = T.accent,
-        Font = FONT_BOLD,
-        TextSize = LAYOUT.rowDesc,
-        TextXAlignment = Enum.TextXAlignment.Right,
-        ZIndex = 5,
-        Active = false,
-    }, row)
-
-    -- ============ 小人画布 ============
-    -- R6 比例（单位 = 像素）：
-    --   头 26x26 | 躯干 34x38 | 臂 14x38 | 腿 16x38
-    local HX, HY = 56, 44       -- 头
-    local TW, TH = 56, 66       -- 躯干
-    local AW, AH = 26, 66       -- 臂
-    local LW, LH = 26, 56       -- 腿
-    local GAP = 3
-
+    -- ===== 子项：人体图（List 的直接子元素，靠高度 0 <-> N 展开）=====
+    -- 尺寸先算出来，后面 CH_HEIGHT 和画布都要用
+    --   总宽固定 240（臂60 + 躯干120 + 臂60）
+    --   头/躯干/腿 竖着排
+    local TOTAL_W = 180
+    local S = math.floor(TOTAL_W / 4)              -- 45
+    local TW, TH = 2 * S, 2 * S                    -- 躯干 90x90
+    local HX, HY = math.floor(S * 1.35), math.floor(S * 1.35)   -- 头：正方形 60x60
+    local AW, AH = 1 * S, 2 * S                    -- 臂 45x90
+    local LW, LH = 1 * S, 2 * S                    -- 腿 45x90
+    local GAP = 3                                  -- 部件之间留缝
     local totalW = AW + GAP + TW + GAP + AW
-    local totalH = HY + 2 + TH + 2 + LH
+    local totalH = HY + GAP + TH + GAP + LH
+    local CH_HEIGHT = totalH + 30
+    local childRow = mk("Frame", {
+        Name = "BodyChildRow",
+        Size = UDim2.new(1, -12, 0, 0),
+        BackgroundColor3 = T.rowChild,
+        BackgroundTransparency = 0.15,
+        BorderSizePixel = 0,
+        LayoutOrder = (self.Items + 1) * 1000 + 1,
+        ClipsDescendants = true,
+        Visible = false,
+        ZIndex = 4,
+        Active = false,
+    }, self.Container)
+    corner(childRow, SIZE.radiusRow)
+    table.insert(self.Widgets, childRow)
+
+    -- 左侧竖条
+    local bar = mk("Frame", {
+        Name = "Bar",
+        Size = UDim2.new(0, 2, 1, -14),
+        Position = UDim2.new(0, 6, 0, 7),
+        BackgroundColor3 = T.accentBar,
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    }, childRow)
+    corner(bar, 1)
 
     local canvas = mk("Frame", {
         Name = "Canvas",
         Size = UDim2.fromOffset(totalW, totalH),
-        Position = UDim2.new(0.5, -totalW / 2, 0, 58),
+        Position = UDim2.new(0.5, -totalW / 2, 0, 16),
         BackgroundTransparency = 1,
         ZIndex = 5,
-    }, row)
+    }, childRow)
 
     local COL_IDLE = Color3.fromRGB(58, 58, 68)
     local COL_HOVER = Color3.fromRGB(78, 78, 92)
@@ -4501,7 +4624,7 @@ function Tab:Body2D(cfg)
             Text = label or "",
             TextColor3 = Color3.fromRGB(150, 150, 162),
             Font = FONT_BOLD,
-            TextSize = 11,
+            TextSize = 12,
             TextXAlignment = Enum.TextXAlignment.Center,
             TextYAlignment = Enum.TextYAlignment.Center,
             ZIndex = 7,
@@ -4512,20 +4635,20 @@ function Tab:Body2D(cfg)
         return b
     end
 
-    -- 布局：左臂 | 躯干 | 右臂，头和腿对齐躯干
     local xArmL = 0
     local xTorso = AW + GAP
     local xArmR = xTorso + TW + GAP
     local yHead = 0
-    local yTorso = HY + 2
-    local yLegs = yTorso + TH + 2
+    local yTorso = HY + GAP
+    local yLegs = yTorso + TH + GAP
 
     mkPart(xTorso + (TW - HX) / 2, yHead, HX, HY, 1, "头")
     mkPart(xTorso, yTorso, TW, TH, 2, "躯干")
     mkPart(xArmL, yTorso, AW, AH, 3, "左臂")
     mkPart(xArmR, yTorso, AW, AH, 4, "右臂")
-    mkPart(xTorso + (TW - LW * 2 - GAP) / 2, yLegs, LW, LH, 5, "左腿")
-    mkPart(xTorso + (TW - LW * 2 - GAP) / 2 + LW + GAP, yLegs, LW, LH, 6, "右腿")
+    local legsX = xTorso + (TW - LW * 2 - GAP) / 2
+    mkPart(legsX, yLegs, LW, LH, 5, "左腿")
+    mkPart(legsX + LW + GAP, yLegs, LW, LH, 6, "右腿")
 
     local function labelOf(idx)
         for _, pt in ipairs(parts) do
@@ -4534,55 +4657,167 @@ function Tab:Body2D(cfg)
         return "?"
     end
 
-    local function render()
+    local render
+    local function setSelected(idx)
+        if not buttons[idx] then return end
+        selected = idx
+        self.Window.State[key] = idx
+        render()
+        if cfg.Callback then pcall(cfg.Callback, idx) end
+    end
+
+    render = function()
         for idx, entry in pairs(buttons) do
             if idx == selected then
                 entry.btn.BackgroundColor3 = COL_ON
-                entry.lbl.TextColor3 = T.tabTextOn
+                pcall(function() entry.lbl.TextColor3 = Color3.fromRGB(18, 18, 22) end)
             else
                 entry.btn.BackgroundColor3 = COL_IDLE
-                entry.lbl.TextColor3 = Color3.fromRGB(150, 150, 162)
+                pcall(function() entry.lbl.TextColor3 = Color3.fromRGB(150, 150, 162) end)
             end
         end
-        info.Text = labelOf(selected)
     end
 
     for idx, entry in pairs(buttons) do
+        bindTap(entry.btn, function()
+            setSelected(idx)
+        end)
         entry.btn.MouseEnter:Connect(function()
             if idx ~= selected then
-                Anim.to(entry.btn, { BackgroundColor3 = COL_HOVER }, 0.12)
+                tween(entry.btn, 0.1, { BackgroundColor3 = COL_HOVER })
             end
         end)
         entry.btn.MouseLeave:Connect(function()
             if idx ~= selected then
-                Anim.to(entry.btn, { BackgroundColor3 = COL_IDLE }, 0.12)
+                tween(entry.btn, 0.1, { BackgroundColor3 = COL_IDLE })
             end
-        end)
-        bindTap(entry.btn, function()
-            selected = idx
-            render()
-            self.Window.State[key] = selected
-            if cfg.Callback then cfg.Callback(selected, labelOf(selected)) end
         end)
     end
 
     render()
 
-    local ctrl = {
-        Get = function() return selected end,
-        Set = function(v)
-            selected = v
-            self.Window.State[key] = v
-            render()
+    -- ===== 展开/收起（和 Expand 完全一样）=====
+    local expandKey = "__body2d_" .. tostring(key)
+    childRow:SetAttribute("__expandKey", expandKey)
+    childRow:SetAttribute("__h", CH_HEIGHT)
+    if self.Window.State[expandKey] == nil then
+        self.Window.State[expandKey] = false
+    end
+    local expanded = self.Window.State[expandKey]
+    local expandTween = nil
+
+    local function setExpanded(open)
+        expanded = open and true or false
+        self.Window.State[expandKey] = expanded
+        self.Window._body2dLastTouched = expandKey
+
+        -- 取消上一次没跑完的收起定时器，避免和新的展开打架
+        if expandTween then
+            pcall(function() expandTween:Cancel() end)
+            expandTween = nil
+        end
+
+        if expanded then
+            childRow.Visible = true
+            childRow.Size = UDim2.new(1, -12, 0, 0)
+            expandTween = TweenService:Create(childRow,
+                TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+                { Size = UDim2.new(1, -12, 0, CH_HEIGHT) })
+            expandTween:Play()
+        else
+            -- 收起：动画走完后隐藏，并且这次一定把它藏住
+            expandTween = TweenService:Create(childRow,
+                TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { Size = UDim2.new(1, -12, 0, 0) })
+            expandTween:Play()
+            task.delay(0.22, function()
+                if not expanded and childRow and childRow.Parent then
+                    childRow.Visible = false
+                end
+            end)
+        end
+
+        Anim.to(arrowBtn, { Rotation = expanded and 180 or 0 }, 0.24,
+            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+    end
+
+    -- 暴露给外部：切 Tab 时按当前展开状态重设显隐，避免被 CDMUI 的 Visible 重置带偏
+    self._restoreBodyState = function()
+        if childRow and childRow.Parent then
+            childRow.Visible = expanded
+            childRow.Size = UDim2.new(1, -12, 0, expanded and CH_HEIGHT or 0)
+        end
+    end
+
+    arrowBtn.MouseButton1Click:Connect(function()
+        playClick()
+        setExpanded(not expanded)
+    end)
+    -- 整行点击也能切换（但不要在箭头重复触发）
+    local rowHit = mk("TextButton", {
+        Name = "RowHit",
+        Size = UDim2.new(1, -50, 0, 52),
+        Position = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        ZIndex = 3,
+        Active = true,
+    }, row)
+    rowHit.MouseButton1Click:Connect(function()
+        playClick()
+        setExpanded(not expanded)
+    end)
+
+    -- 初始状态：按 State 里的值恢复（默认收起）
+    if expanded then
+        childRow.Visible = true
+        childRow.Size = UDim2.new(1, -12, 0, CH_HEIGHT)
+        arrowBtn.Rotation = 180
+    else
+        childRow.Visible = false
+        childRow.Size = UDim2.new(1, -12, 0, 0)
+        arrowBtn.Rotation = 0
+    end
+
+    -- 注册到切页恢复器，保证切回来时按当前状态恢复
+    table.insert(self.Window.ExpandRestorers, {
+        tab = self,
+        expandKey = expandKey,
+        panelRow = row,          -- 切页展开动画要对齐到主行
+        get = function() return self.Window.State[expandKey] == true end,
+        -- 注意：这里只改界面，不要改 State
+        -- setPage 会对非当前页调用 apply(false) 来隐藏，那不能覆盖用户的真实选择
+        apply = function(open)
+            local show = open == true
+            if show then
+                childRow.Visible = true
+                childRow.Size = UDim2.new(1, -12, 0, CH_HEIGHT)
+            else
+                childRow.Size = UDim2.new(1, -12, 0, 0)
+                childRow.Visible = false
+            end
+            pcall(function() arrowBtn.Rotation = show and 180 or 0 end)
         end,
+    })
+
+    self.Items = self.Items + 1
+    self.Rows[key] = {
+        Set = function(v)
+            if type(v) == "number" then setSelected(v) end
+        end,
+        SetSilent = function(v)
+            if type(v) == "number" and buttons[v] then
+                selected = v
+                self.Window.State[key] = v
+                render()
+            end
+        end,
+        Get = function() return selected end,
+        Expand = function(open) setExpanded(open) end,
     }
-    self.Rows[key] = ctrl
-    return ctrl
+    return self.Rows[key]
 end
 
--- ============================================================
--- Section：分组标题（视觉分隔，带下划细线）
--- ============================================================
 function Tab:Section(cfg)
     local row = mk("Frame", {
         Name = "SectionRow",
