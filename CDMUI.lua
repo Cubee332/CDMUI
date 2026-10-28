@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.6.5  修复鼠标拖动（input.Position 为 (0,0) 时用 GetMouseLocation 兜底）；Body2D 只剩箭头可点
+-- CDMUI v1.7.0  Tab 点击与拖动重写（死区+实时跟随）；布局间隔修复；悬浮刷新与滚动优化
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.6.5"
+UI.Version = "1.7.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -570,6 +570,9 @@ local LAYOUT = {
     btnText     = IS_MOBILE and 15 or 13,
     hintSize    = IS_MOBILE and 14 or 13,
     listTop     = IS_MOBILE and 146 or 130,
+    -- Tab 栏和内容区之间的硬间隔（像素）
+    --   留够距离，避免拖动时误判到另一个区域
+    gapTabList  = IS_MOBILE and 14 or 12,
     padX        = IS_MOBILE and 16 or 20,
     padGap      = IS_MOBILE and 8 or 6,
     childH      = IS_MOBILE and 48 or 42,
@@ -767,8 +770,44 @@ local function attachInertia(frame, opts)
     end)
 
     local DRAG_TH   = IS_MOBILE and 6 or 4        -- 超过多少像素才算拖动
-    local MIN_SPEED = 0.12                        -- 低于这个速度就停
+    local MIN_SPEED = 0.15                        -- 低于这个速度就停
     local SAMPLE_WINDOW = 0.08                    -- 用最近多少秒的位移估算速度
+
+    -- 排除区域：落在这些矩形内的按下不归本控件处理
+    --   （用于让 Tab 栏和内容区互不干扰，不依赖容易卡住的全局锁）
+    local excludeRects = opts.excludeRects or {}
+
+    -- 排除判定：精确边界（布局上已留出 gapTabList 间隔，不需要放宽）
+    local function inExcluded(pos)
+        for _, inst in ipairs(excludeRects) do
+            if inst and inst.Parent then
+                local ap, asz = inst.AbsolutePosition, inst.AbsoluteSize
+                if pos.X >= ap.X and pos.X <= ap.X + asz.X
+                   and pos.Y >= ap.Y and pos.Y <= ap.Y + asz.Y then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    -- 输入目标是否落在排除区域内（比坐标更可靠）
+    local function targetInExcluded(input)
+        local ok, target = pcall(function() return input.Target end)
+        if not ok or not target then return false end
+        for _, inst in ipairs(excludeRects) do
+            if inst and inst.Parent then
+                local node = target
+                local guard = 0
+                while node and guard < 30 do
+                    if node == inst then return true end
+                    node = node.Parent
+                    guard = guard + 1
+                end
+            end
+        end
+        return false
+    end
 
     -- 力度映射：拖动速度越快 -> 初速度越大、摩擦越小（滑得越远）
     --   这样「轻推」和「用力甩」的手感明显不同
@@ -831,6 +870,8 @@ local function attachInertia(frame, opts)
         stopInertia()
 
         local tickCount = 0
+        local acc = 0
+        local lastWritten = canvasOf()
         conn = RunService.RenderStepped:Connect(function()
             if destroyed or not frame or not frame.Parent then
                 stopInertia()
@@ -843,12 +884,32 @@ local function attachInertia(frame, opts)
                 return
             end
 
+            -- 累计到至少 1 像素再写，减少无效的属性赋值
+            acc = acc + v
+            if math.abs(acc) < 1 then return end
+
             local cur = canvasOf()
-            local nxt = setCanvas(cur + v)
-            if math.abs(nxt - cur) < 0.5 then
+            local nxt = setCanvas(cur + acc)
+            local delta = math.abs(nxt - cur)
+            acc = 0
+
+            -- 撞到边界就停
+            if delta < 0.5 then
                 stopInertia()
+                return
             end
+
+            -- 位置没变化就别重复写（Roblox 会因此重新布局）
+            if math.abs(nxt - lastWritten) < 0.5 then return end
+            lastWritten = nxt
+
+            if opts.onScroll then UI.safeCall(opts.onScroll) end
         end)
+    end
+
+    -- 滚动期间持续刷新悬停（鼠标不动也要更新高亮）
+    local function markDirty()
+        if opts.onScroll then UI.safeCall(opts.onScroll) end
     end
 
     local function posOf(input)
@@ -891,8 +952,24 @@ local function attachInertia(frame, opts)
         if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then
             return
         end
+
+
         local pos = posOf(input)
-        local hit = (pos and insideFrame(pos)) or isTargetInside(input)
+
+        -- 落在排除区域（如 Tab 栏）内：不处理
+        -- 排除判定：用鼠标真实位置（比 input.Position 可靠）
+        local mp = nil
+        local okLoc, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+        if okLoc and typeof(loc) == "Vector2" then mp = loc end
+
+        if mp and inExcluded(mp) then return end
+        if pos and inExcluded(pos) then return end
+        if targetInExcluded(input) then return end
+
+        local inside = (mp and insideFrame(mp)) or (pos and insideFrame(pos))
+        local tgt = isTargetInside(input)
+
+        local hit = inside or tgt
         if not hit then return end
 
         stopInertia()
@@ -925,6 +1002,7 @@ local function attachInertia(frame, opts)
 
         local target = startCanvas - d
         setCanvas(target)
+        markDirty()
 
         -- 采样用于估算速度
         local now = os.clock()
@@ -976,10 +1054,12 @@ local function attachInertia(frame, opts)
         end
     end)
 
-    -- 滚轮：立刻走一大半（保证响应），剩下交给惯性滑行
-    --   如果全部交给惯性，第一格会感觉「没反应 / 变慢」
-    local WHEEL_STEP  = 55          -- 每格立刻位移
-    local WHEEL_SPEED = 18          -- 额外注入的惯性速度
+    -- 滚轮：立刻位移 + 轻微惯性
+    --   关键：连续快速滚动时不要叠加加速，否则会「瞬移」
+    --   做法是每格只注入固定的小速度，并限制总速度上限
+    local WHEEL_STEP  = 40          -- 每格立刻位移（40 约等于 2.5 行）
+    local WHEEL_SPEED = 8           -- 每格额外注入的惯性
+    local WHEEL_MAX   = 20          -- 惯性速度上限
     local lastWheel = 0
     frame.InputChanged:Connect(function(input)
         if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
@@ -993,39 +1073,103 @@ local function attachInertia(frame, opts)
             and math.max(0, frame.AbsoluteCanvasSize.X - frame.AbsoluteSize.X)
             or  math.max(0, frame.AbsoluteCanvasSize.Y - frame.AbsoluteSize.Y)
 
-        -- ① 立刻位移（跟手）
+        -- ① 立刻位移（跟手，这是主要位移）
         local immediate = -dz * WHEEL_STEP
         local afterImmediate = setCanvas(cur + immediate)
 
-        -- ② 剩余惯性（连续滚轮时叠加）
-        local boosted
-        if now - lastWheel < 0.12 then
-            boosted = velocity - dz * WHEEL_SPEED * 0.45
-        else
-            boosted = -dz * WHEEL_SPEED
+        -- ② 轻微惯性：连续滚动时不累加，直接用固定值
+        --    （之前用 velocity - dz*... 累加，快速滚动会越滚越快导致瞬移）
+        local boosted = -dz * WHEEL_SPEED
+        if now - lastWheel < 0.10 then
+            -- 连续滚动：只保留方向，不叠加幅度
+            if (velocity > 0) ~= (boosted > 0) then
+                boosted = boosted * 1.0
+            else
+                boosted = math.clamp(velocity + boosted, -WHEEL_MAX, WHEEL_MAX)
+            end
         end
         lastWheel = now
 
-        -- 撞边界：不给惯性，避免顶着墙滑
+        -- 撞边界：不给惯性
         if (afterImmediate <= 0 and boosted < 0) or (afterImmediate >= maxV and boosted > 0) then
             velocity = 0
             stopInertia()
             return
         end
 
-        velocity = boosted
-        forceFriction = 0.92
+        velocity = math.clamp(boosted, -WHEEL_MAX, WHEEL_MAX)
+        forceFriction = 0.91
         startInertia()
     end)
+
+    -- 登记到全局，别的区域开始拖动时能停掉我
+    _G.__CDMUIInertiaStoppers = _G.__CDMUIInertiaStoppers or {}
+    _G.__CDMUIInertiaStoppers[frame] = stopInertia
 
     return {
         Destroy = function()
             destroyed = true
             stopInertia()
+            if _G.__CDMUIInertiaStoppers then
+                _G.__CDMUIInertiaStoppers[frame] = nil
+            end
         end,
         Stop = stopInertia,
         IsDragging = function() return dragging end,
     }
+end
+
+-- ============================================================
+-- 悬停刷新
+--   问题：滚动（滚轮/拖动）时鼠标物理位置没变，
+--         Roblox 不会重发 MouseEnter/MouseLeave，
+--         导致鼠标下的那一行高亮状态是旧的。
+--   方案：滚动结束后主动检测鼠标落在哪个控件上，手动补发状态。
+-- ============================================================
+-- 节流：滚动时每帧最多刷一次（避免快速滚动时每像素都扫一遍）
+local _hoverLastRun = 0
+local _hoverPending = false
+
+local function refreshHover(root)
+    if not root or not root.Parent then return end
+
+    -- 同一帧内只跑一次
+    local now = os.clock()
+    if now - _hoverLastRun < 0.016 then
+        if not _hoverPending then
+            _hoverPending = true
+            task.defer(function()
+                _hoverPending = false
+                refreshHover(root)
+            end)
+        end
+        return
+    end
+    _hoverLastRun = now
+
+    local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+    if not ok or typeof(loc) ~= "Vector2" then return end
+
+    -- 只扫直接子元素（行都是 List 的直接子元素），比 GetDescendants 快得多
+    local function check(d)
+        if d:GetAttribute("__hoverEnter") == nil then return end
+        local p2, s2 = d.AbsolutePosition, d.AbsoluteSize
+        -- 快速排除：完全在视口外的不算
+        if s2.X <= 0 or s2.Y <= 0 then return end
+        local inside = loc.X >= p2.X and loc.X <= p2.X + s2.X
+                   and loc.Y >= p2.Y and loc.Y <= p2.Y + s2.Y
+        local wasIn = d:GetAttribute("__hoverActive") == true
+        if inside == wasIn then return end
+
+        d:SetAttribute("__hoverActive", inside)
+        local fns = _G.__CDMUIHoverFns and _G.__CDMUIHoverFns[d]
+        local f = fns and (inside and fns.enter or fns.leave)
+        if type(f) == "function" then pcall(f) end
+    end
+
+    for _, d in ipairs(root:GetChildren()) do
+        check(d)
+    end
 end
 
 local function adaptiveScale()
@@ -1886,19 +2030,28 @@ local function makeFoldable(tab, opts)
 end
 -- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
 local function bindShieldClose(self)
-    -- Shield 已设 Active=false，不再接收点击。
-    -- 改用全局 InputBegan 判断：点在面板外就关闭。
-    local conn = UserInputService.InputBegan:Connect(function(input, processed)
-        if processed then return end
+    -- Shield 已设 Active=false，不再接收点击，改用全局 InputBegan。
+    -- 注意两点：
+    --   ① 不能因为 processed=true 就返回——游戏里大量 UI 都会处理点击，
+    --      我们要的只是「点在面板外」，跟 processed 无关
+    --   ② input.Position 有时是 (0,0)，要用 GetMouseLocation 兜底
+    local conn = UserInputService.InputBegan:Connect(function(input)
         local ut = input.UserInputType
         if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then
             return
         end
-        if not self.Visible or self.Busy then return end
+        if not self.Visible or self.Busy or self.Destroyed then return end
 
+        -- 取点击位置：优先事件自带，退化到鼠标位置
         local pos
-        local ok = pcall(function() pos = input.Position end)
-        if not ok or typeof(pos) ~= "Vector2" then return end
+        local ok, v = pcall(function() return input.Position end)
+        if ok and typeof(v) == "Vector2" and (v.X ~= 0 or v.Y ~= 0) then
+            pos = v
+        else
+            local ok2, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+            if ok2 and typeof(loc) == "Vector2" then pos = loc end
+        end
+        if not pos then return end
 
         local ap = self.Panel.AbsolutePosition
         local asz = self.Panel.AbsoluteSize
@@ -2054,7 +2207,8 @@ function UI.Create(opts)
     -- Tab 栏
     local tabBar = mk("ScrollingFrame", {
         Name = "TabBar",
-        Size = UDim2.new(1, -LAYOUT.padX * 2, 0, LAYOUT.tabHeight + 6),
+        -- 高度就是 tabHeight（不再 +6），边界更干净
+        Size = UDim2.new(1, -LAYOUT.padX * 2, 0, LAYOUT.tabHeight),
         Position = UDim2.new(0, LAYOUT.padX, 0, LAYOUT.tabY),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
@@ -2066,7 +2220,10 @@ function UI.Create(opts)
         ScrollBarImageTransparency = 0.35,
         ElasticBehavior = Enum.ElasticBehavior.Never,
         Active = true,
+        Selectable = true,
         ClipsDescendants = true,
+        -- 比 List(3) 高，避免内容区盖住 Tab 栏的滚动条
+        ZIndex = 5,
     }, panel)
 
     self.TabBar = tabBar
@@ -2080,7 +2237,7 @@ function UI.Create(opts)
     -- Tab 栏拖动：只有从 Tab 栏范围内起手才生效
     do
         local bar = tabBar
-        local dragging, dragMoved = false, false
+        local dragging, dragMoved, dragStarted = false, false, false
         local dragStartX, dragStartY, dragStartCanvas = 0, 0, 0
         local lastDragX = 0
 
@@ -2098,6 +2255,10 @@ function UI.Create(opts)
             inertiaVel = 0
         end
 
+        -- 登记到全局，内容区开始拖动时能停掉我
+        _G.__CDMUIInertiaStoppers = _G.__CDMUIInertiaStoppers or {}
+        _G.__CDMUIInertiaStoppers[bar] = stopInertia
+
         -- 力度映射：轻推快停，用力甩滑得远
         local function applyForce(rawSpeed)
             local s = math.abs(rawSpeed)
@@ -2108,15 +2269,17 @@ function UI.Create(opts)
                 return rawSpeed * (0.75 + k * 0.35), 0.88 + k * 0.04
             else
                 local k = math.min(1, (s - 2.5) / 4)
-                return math.min(rawSpeed * 1.15, 70), 0.94 + k * 0.025
+                -- 上限 55，摩擦 0.93~0.955，甩起来有肉感但不瞬移
+                return math.min(rawSpeed * 1.10, 55), 0.93 + k * 0.025
             end
         end
 
         local function startInertia()
             if math.abs(inertiaVel) < 0.12 then return end
-            stopInertia()
+            -- 先取出速度，再 stopInertia（它会把 inertiaVel 清零）
             local v = inertiaVel
             local fr = inertiaFriction
+            stopInertia()
             inertiaConn = RunService.RenderStepped:Connect(function()
                 if not bar or not bar.Parent then
                     stopInertia()
@@ -2145,6 +2308,20 @@ function UI.Create(opts)
                and py >= ap.Y and py <= ap.Y + sz.Y
         end
 
+        -- 输入目标是不是 Tab 栏自己或它的子孙（比坐标更可靠）
+        local function isTargetInBar(input)
+            local ok, target = pcall(function() return input.Target end)
+            if not ok or not target then return false end
+            local node = target
+            local guard = 0
+            while node and guard < 30 do
+                if node == bar then return true end
+                node = node.Parent
+                guard = guard + 1
+            end
+            return false
+        end
+
         -- 拖动期间把 Tab 按钮全禁掉，松手就不会触发 Activated
         local function setTabsActive(on)
             for _, tb in ipairs(self.Tabs) do
@@ -2152,17 +2329,37 @@ function UI.Create(opts)
             end
         end
 
+        -- 获取输入位置（input.Position 有时是 (0,0)，用鼠标位置兜底）
+        local function posOf2(input)
+            local ok, v = pcall(function() return input.Position end)
+            if ok and typeof(v) == "Vector2" and (v.X ~= 0 or v.Y ~= 0) then return v end
+            local ok2, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+            if ok2 and typeof(loc) == "Vector2" then return loc end
+            return nil
+        end
+
         local function onBegin(input)
             if not bar.ScrollingEnabled then return end
             local it = input.UserInputType
             if it ~= Enum.UserInputType.Touch and it ~= Enum.UserInputType.MouseButton1 then return end
-            if not inBar(input.Position.X, input.Position.Y) then return end
+            local p0 = posOf2(input)
+            -- 位置判定：坐标在 Tab 栏内 或 点击目标就是 Tab 栏的子孙
+            local ok = (p0 and inBar(p0.X, p0.Y)) or isTargetInBar(input)
+            if not ok then return end
+            -- 停掉其它区域还在跑的惯性（避免两个一起动）
+            local stoppers = _G.__CDMUIInertiaStoppers
+            if stoppers then
+                for target, fn in pairs(stoppers) do
+                    if target ~= bar then pcall(fn) end
+                end
+            end
             stopInertia()
             dragging = true
             dragMoved = false
-            dragStartX = input.Position.X
-            dragStartY = input.Position.Y
-            lastDragX = input.Position.X
+            dragStarted = false
+            dragStartX = p0.X
+            dragStartY = p0.Y
+            lastDragX = p0.X
             dragStartCanvas = bar.CanvasPosition.X
             samples = { { t = os.clock(), p = bar.CanvasPosition.X } }
         end
@@ -2171,29 +2368,36 @@ function UI.Create(opts)
             if not dragging then return end
             local it = input.UserInputType
             if it ~= Enum.UserInputType.Touch and it ~= Enum.UserInputType.MouseMovement then return end
-            local curX = input.Position.X
-            local dy = input.Position.Y - dragStartY
+            local p1 = posOf2(input)
+            if not p1 then return end
+            local curX = p1.X
+            local dy = p1.Y - dragStartY
             local dx = curX - dragStartX
 
-            -- 手机手指滑动的起始抖动比鼠标大，阈值放低一点更好拖
-            local DRAG_TH = IS_MOBILE and 12 or 18
-            if not dragMoved
-               and math.abs(dx) > DRAG_TH
-               and math.abs(dx) > math.abs(dy) * (IS_MOBILE and 1.2 or 1.5) then
-                dragMoved = true
-                setTabsActive(false)
-                -- 判定成拖动这一刻重新取基准，别把判定距离补上去
-                dragStartX = curX
+            -- 阈值降到 4px：Tab 栏是横向滚动区，用户按下就是想横拖，
+            --   不需要和纵向做比较（之前 18px + 方向判定会让内容区先抢走拖动）
+            -- 死区：3px 内不动（过滤点击时的鼠标抖动）
+            --   超过死区立刻实时跟随（不用等阈值，拖起来才跟手）
+            --   松手时按总位移判断是「点击」还是「拖动」
+            local DEAD_ZONE = IS_MOBILE and 4 or 3
+            local DRAG_TH   = IS_MOBILE and 8 or 6
+
+            if math.abs(dx) <= DEAD_ZONE then return end
+
+            -- 第一次越过死区：从当前位置起算，避免跳一下
+            if not dragStarted then
+                dragStarted = true
                 lastDragX = curX
-                return
             end
-            if not dragMoved then return end
+
+            -- 总位移超过阈值才算「拖动」（松手时用来决定是否切页）
+            if math.abs(dx) > DRAG_TH then
+                dragMoved = true
+            end
 
             local sc2 = (self.Scale and self.Scale.Scale) or 1
             if sc2 <= 0 then sc2 = 1 end
             local maxX = math.max(0, bar.CanvasSize.X.Offset * sc2 - bar.AbsoluteSize.X)
-            -- 手指移动 1px（已缩放），内容要移动 1px（已缩放）
-            -- 但 CanvasPosition 是未缩放坐标，所以要乘 sc2 才对得上
             local step = (lastDragX - curX)
             lastDragX = curX
             local target = math.clamp(bar.CanvasPosition.X + step, 0, maxX)
@@ -2212,8 +2416,52 @@ function UI.Create(opts)
             local it = input.UserInputType
             if it == Enum.UserInputType.Touch or it == Enum.UserInputType.MouseButton1 then
                 dragging = false
+                -- 无论如何都恢复 Tab 按钮可点击（防止被卡在 false）
+                setTabsActive(true)
+
+                -- 没拖动 = 点击：自己判断点到了哪个 Tab
+                --   （ScrollingFrame 会吞掉子按钮的 Activated，不能依赖它）
+                if not dragMoved then
+                    local mp = posOf2(input)
+                    if mp then
+                        -- 找最近的 Tab 按钮（按 X 距离），容错更好
+                        local bestIdx, bestDist = nil, math.huge
+                        for i, tb in ipairs(self.Tabs) do
+                            local b = tb.Button
+                            if b and b.Parent and b.Visible and b.AbsoluteSize.X > 1 then
+                                local bp, bs = b.AbsolutePosition, b.AbsoluteSize
+                                -- 纵向必须在栏内
+                                local barTop = bar.AbsolutePosition.Y
+                                local barBot = barTop + bar.AbsoluteSize.Y
+                                if mp.Y >= barTop - 4 and mp.Y <= barBot + 4 then
+                                    -- 横向：优先精确命中，否则取最近
+                                    if mp.X >= bp.X and mp.X <= bp.X + bs.X then
+                                        bestIdx, bestDist = i, 0
+                                        break
+                                    else
+                                        local cx2 = bp.X + bs.X / 2
+                                        local d = math.abs(mp.X - cx2)
+                                        if d < bestDist then
+                                            bestIdx, bestDist = i, d
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        -- 最近距离不能超过一个 Tab 宽度
+                        if bestIdx then
+                            local b = self.Tabs[bestIdx].Button
+                            if bestDist <= b.AbsoluteSize.X * 0.75 then
+                                playClick()
+                                self:SelectTab(bestIdx)
+                            end
+                        end
+                    end
+                end
+
                 if dragMoved then
-                    getgenv()._CDMUITabDragBlock = os.clock() + 0.15
+                    -- 只有真的拖动了才屏蔽点击（0.12s 足够覆盖这次松手）
+                    getgenv()._CDMUITabDragBlock = os.clock() + 0.12
 
                     -- 用最近采样估算速度，按力度映射滑行距离
                     if #samples >= 2 then
@@ -2230,24 +2478,60 @@ function UI.Create(opts)
                 end
                 samples = {}
                 dragMoved = false
+                dragStarted = false
                 lastDragX = 0
                 -- 延迟恢复，确保这次松手已经处理完
-                task.delay(0.15, function()
-                    setTabsActive(true)
-                end)
+                
             end
         end
 
         table.insert(self.Connections, UserInputService.InputBegan:Connect(onBegin))
         table.insert(self.Connections, UserInputService.InputChanged:Connect(onMove))
         table.insert(self.Connections, UserInputService.InputEnded:Connect(onEnd))
+
+        -- Tab 栏滚轮：立刻位移 + 惯性滑行
+        table.insert(self.Connections, UserInputService.InputChanged:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+            local pos = posOf2(input)
+            if not pos then
+                local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+                if ok and typeof(loc) == "Vector2" then pos = loc end
+            end
+            if not pos or not inBar(pos.X, pos.Y) then return end
+
+            local dz = input.Position.Z
+            if dz == 0 then return end
+
+            local sc3 = (self.Scale and self.Scale.Scale) or 1
+            if sc3 <= 0 then sc3 = 1 end
+            local maxX3 = math.max(0, bar.CanvasSize.X.Offset * sc3 - bar.AbsoluteSize.X)
+
+            -- ① 立刻位移
+            local immediate = -dz * 60
+            local cur3 = bar.CanvasPosition.X
+            local after3 = math.clamp(cur3 + immediate, 0, maxX3)
+            bar.CanvasPosition = Vector2.new(after3, 0)
+
+            -- ② 惯性
+            local boosted = -dz * 20
+            if (after3 <= 0 and boosted < 0) or (after3 >= maxX3 and boosted > 0) then
+                stopInertia()
+                return
+            end
+            inertiaVel = boosted
+            inertiaFriction = 0.92
+            startInertia()
+        end))
     end
 
     -- 列表
     local list = mk("ScrollingFrame", {
         Name = "List",
-        Size = UDim2.new(1, -LAYOUT.padX * 2, 1, -200),
-        Position = UDim2.new(0, LAYOUT.padX, 0, LAYOUT.listTop),
+        -- 顶部和 Tab 栏留出明确间隔，底部避开 Hint 提示
+        Size = UDim2.new(1, -LAYOUT.padX * 2, 1,
+            -(LAYOUT.listTop + LAYOUT.gapTabList + 34)),
+        Position = UDim2.new(0, LAYOUT.padX, 0,
+            LAYOUT.listTop + LAYOUT.gapTabList),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         ZIndex = 3,
@@ -2257,7 +2541,7 @@ function UI.Create(opts)
         ScrollingDirection = Enum.ScrollingDirection.Y,
         CanvasSize = UDim2.new(0, 0, 0, 0),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+        ElasticBehavior = Enum.ElasticBehavior.Never,
         Active = true,
     }, panel)
     local pad = mk("UIPadding", {
@@ -2275,7 +2559,16 @@ function UI.Create(opts)
     list:SetAttribute("__baseTrans", list.BackgroundTransparency)
 
     -- 内容区：拖动 / 滚轮都带惯性
-    self._listInertia = attachInertia(list, { axis = "Y" })
+    --   onScroll 里刷新悬停：滚动时鼠标物理位置不变，
+    --   Roblox 不会重发 MouseEnter，必须手动补
+    self._listInertia = attachInertia(list, {
+        axis = "Y",
+        -- 排除 Tab 栏矩形：点在那里应该拖 Tab 栏，不是内容区
+        excludeRects = { tabBar },
+        onScroll = function()
+            refreshHover(list)
+        end,
+    })
 
     -- 底部提示
     local hint = mk("TextLabel", {
@@ -2287,7 +2580,8 @@ function UI.Create(opts)
         TextColor3 = T.hint,
         Font = FONT,
         TextSize = LAYOUT.hintSize,
-        ZIndex = 3,
+        -- 比 List(3) 高，否则被内容区盖住
+        ZIndex = 6,
     }, panel)
 
     -- 快捷键（仅在显式传了 ToggleKey 时注册，避免和游戏按键冲突）
@@ -2613,16 +2907,6 @@ function Window:_PlayIntro()
                         if totalW <= barW + 4 or n < 3 then
                             -- Tab 撑不满一屏：不滚动，改成从左往右依次淡入
                             self._tabAnimating = true
-                            -- 同样禁用交互，避免鼠标提前点亮
-                            local savedTabActive = {}
-                            for i, tb in ipairs(self.Tabs) do
-                                if tb.Button then
-                                    pcall(function()
-                                        savedTabActive[i] = tb.Button.Active
-                                        tb.Button.Active = false
-                                    end)
-                                end
-                            end
                             local orig = {}
                             for i, tb in ipairs(self.Tabs) do
                                 if tb.Button then
@@ -2667,14 +2951,6 @@ function Window:_PlayIntro()
                                         self.TabBar.ScrollBarImageTransparency = 0.35
                                     end)
                                 end
-                                -- 恢复 Tab 交互
-                                for i, tb in ipairs(self.Tabs) do
-                                    if tb.Button then
-                                        pcall(function()
-                                            tb.Button.Active = savedTabActive[i] ~= false
-                                        end)
-                                    end
-                                end
                                 task.defer(function()
                                     if self.Destroyed then return end
                                     pcall(function() self:LayoutTabs() end)
@@ -2707,17 +2983,6 @@ function Window:_PlayIntro()
                             pcall(function() bar.ScrollBarImageTransparency = 1 end)
                         end
 
-                        -- 动画期间禁用 Tab 按钮的鼠标响应，
-                        -- 否则鼠标停在某个 Tab 上会提前点亮它
-                        local savedTabActive = {}
-                        for i, tb in ipairs(self.Tabs) do
-                            if tb.Button then
-                                pcall(function()
-                                    savedTabActive[i] = tb.Button.Active
-                                    tb.Button.Active = false
-                                end)
-                            end
-                        end
 
                         -- 起点：最后一个 Tab 的左边缘刚好落在栏最左边
                         local lastBase = bases[n]
@@ -4224,14 +4489,25 @@ local function baseRow(tab, height)
     -- 每行自己的入场标志：播完这一行就立刻允许悬停，
     -- 不用等全部行播完
     row:SetAttribute("__introBusy", false)
-    row.MouseEnter:Connect(function()
+
+    local function onEnter()
         if row:GetAttribute("__introBusy") then return end
         tween(row, 0.12, { BackgroundColor3 = T.rowHover, BackgroundTransparency = 0.1 })
-    end)
-    row.MouseLeave:Connect(function()
+    end
+    local function onLeave()
         if row:GetAttribute("__introBusy") then return end
         tween(row, 0.12, { BackgroundColor3 = T.row, BackgroundTransparency = 0.15 })
-    end)
+    end
+
+    row.MouseEnter:Connect(onEnter)
+    row.MouseLeave:Connect(onLeave)
+
+    -- 登记到悬停刷新系统（滚动时鼠标不动也能正确高亮）
+    --   注意：SetAttribute 不支持函数，回调存到弱表里
+    row:SetAttribute("__hoverEnter", true)
+    _G.__CDMUIHoverFns = _G.__CDMUIHoverFns or setmetatable({}, { __mode = "k" })
+    _G.__CDMUIHoverFns[row] = { enter = onEnter, leave = onLeave }
+
     return row
 end
 
