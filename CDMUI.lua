@@ -276,7 +276,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.9.2  HUD 位置动态跟随夜视仪；PC/手机双模式适配
+-- CDMUI v1.9.3  HUD 行显示修复（syncRow 无条件设 true + 容器查找）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -289,7 +289,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.9.2"
+UI.Version = "1.9.3"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4017,7 +4017,7 @@ do
     local BORDER_IMG = "rbxassetid://110336735200080"
 
     -- 尺寸：完全对齐夜视仪框（184 x 84，位置 12, 849）
-    local BOX_W    = IS_MOBILE and 210 or 185
+    local BOX_W    = 185      -- 和夜视仪框严格同宽
     local BOX_X   = 12
     -- 夜视仪框：顶部 y=849，高 84，底边距屏幕底 76px
     -- HUD 挂在它正上方，留 8px 间隙
@@ -4555,23 +4555,22 @@ do
         local function syncRow(key, shouldShow)
             local r = hudRows[key]
             if not r then return end
+            -- 直接从容器里找实际对象，避免 hudRows 里存的是旧引用
+            local real = hudInner and hudInner:FindFirstChild(key .. "Row")
+            local node = real or r.root
+            if not node then return end
+
             if shouldShow then
                 order = order + 1
-                r.root.LayoutOrder = order
-                if not r.root.Visible then
-                    -- 入场：从透明淡入
-                    r.root.Visible = true
-                    r.label.TextTransparency = 1
-                    r.value.TextTransparency = 1
-                    TweenService:Create(r.label,
-                        TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                        { TextTransparency = 0.25 }):Play()
-                    TweenService:Create(r.value,
-                        TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                        { TextTransparency = 0 }):Play()
+                node.LayoutOrder = order
+                node.Visible = true          -- 无条件设 true（不再判断）
+                -- 淡入只在从隐藏变显示时做
+                if r.label and r.value then
+                    r.label.TextTransparency = 0.25
+                    r.value.TextTransparency = 0
                 end
             else
-                r.root.Visible = false
+                node.Visible = false
             end
         end
 
@@ -4579,12 +4578,19 @@ do
         syncRow("ping", showPing)
         syncRow("players", showPlayers)
 
+
         -- 高度必须按「实际显示的行数」算，不能用 activeRows() 的结果
         --   （activeRows 读的是标志位，若和实际 Visible 不一致就会算错）
+        local function isRowVisible(key)
+            local real = hudInner and hudInner:FindFirstChild(key .. "Row")
+            if real then return real.Visible end
+            local r = hudRows[key]
+            return r and r.root and r.root.Visible or false
+        end
         local visN = 0
-        if hudRows.fps and hudRows.fps.root.Visible then visN = visN + 1 end
-        if hudRows.ping and hudRows.ping.root.Visible then visN = visN + 1 end
-        if hudRows.players and hudRows.players.root.Visible then visN = visN + 1 end
+        if isRowVisible("fps") then visN = visN + 1 end
+        if isRowVisible("ping") then visN = visN + 1 end
+        if isRowVisible("players") then visN = visN + 1 end
         if visN == 0 then
             hudFrame.Visible = false
             return
@@ -4696,6 +4702,17 @@ do
             if acc >= 0.15 then
                 acc = 0
                 updateText()
+                -- 每 0.15 秒钉一次行可见性
+                --   面板动画链路会反复改 Visible，与其追着改，
+                --   不如在渲染循环里持续纠正（这是最后一道防线）
+                if hudInner then
+                    local f = hudInner:FindFirstChild("fpsRow")
+                    local p2 = hudInner:FindFirstChild("pingRow")
+                    local pl = hudInner:FindFirstChild("playersRow")
+                    if f then f.Visible = showFPS and true or false end
+                    if p2 then p2.Visible = showPing and true or false end
+                    if pl then pl.Visible = showPlayers and true or false end
+                end
             end
         end)
     end
