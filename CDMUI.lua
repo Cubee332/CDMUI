@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.6.3  加入惯性滚动（按拖动力度决定滑行距离）；平台判定与拖动修复
+-- CDMUI v1.6.4  修复惯性滚动：全局 InputBegan、关闭原生滚动、滚轮立即响应
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.6.3"
+UI.Version = "1.6.4"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -759,6 +759,13 @@ local function attachInertia(frame, opts)
     local axis = opts.axis or "Y"
     local isX = (axis == "X")
 
+    -- 关掉 ScrollingFrame 自带的拖动/弹性，全部由这里接管
+    --   （否则原生滚动会先改 CanvasPosition，我们的逻辑读到的是被改过的值）
+    pcall(function()
+        frame.ScrollingEnabled = false
+        frame.ElasticBehavior = Enum.ElasticBehavior.Never
+    end)
+
     local DRAG_TH   = IS_MOBILE and 6 or 4        -- 超过多少像素才算拖动
     local MIN_SPEED = 0.12                        -- 低于这个速度就停
     local SAMPLE_WINDOW = 0.08                    -- 用最近多少秒的位移估算速度
@@ -850,15 +857,23 @@ local function attachInertia(frame, opts)
         return nil
     end
 
-    frame.InputBegan:Connect(function(input)
+    -- 判断某个屏幕坐标是否落在 frame 内
+    local function insideFrame(pos)
+        local ap, asz = frame.AbsolutePosition, frame.AbsoluteSize
+        return pos.X >= ap.X and pos.X <= ap.X + asz.X
+           and pos.Y >= ap.Y and pos.Y <= ap.Y + asz.Y
+    end
+
+    -- 按下：用全局 InputBegan（ScrollingFrame 会吞掉自己的 InputBegan）
+    local beganConn = UserInputService.InputBegan:Connect(function(input, processed)
         local ut = input.UserInputType
         if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then
             return
         end
-        stopInertia()
         local pos = posOf(input)
-        if not pos then return end
+        if not pos or not insideFrame(pos) then return end
 
+        stopInertia()
         dragging = true
         startPos = pos
         startCanvas = canvasOf()
@@ -934,35 +949,45 @@ local function attachInertia(frame, opts)
         end
     end)
 
-    -- 滚轮：不直接跳转，而是注入一个初速度让它滑过去（和拖动同样的惯性手感）
-    local WHEEL_SPEED = 14          -- 每格滚轮注入的初速度（像素/帧）
+    -- 滚轮：立刻走一大半（保证响应），剩下交给惯性滑行
+    --   如果全部交给惯性，第一格会感觉「没反应 / 变慢」
+    local WHEEL_STEP  = 55          -- 每格立刻位移
+    local WHEEL_SPEED = 18          -- 额外注入的惯性速度
     local lastWheel = 0
     frame.InputChanged:Connect(function(input)
         if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
 
-        local now = os.clock()
         local dz = input.Position.Z
         if dz == 0 then return end
 
-        -- 连续滚轮时叠加加速，手感更跟手
-        if now - lastWheel < 0.15 then
-            velocity = velocity - dz * WHEEL_SPEED * 0.5
-        else
-            velocity = -dz * WHEEL_SPEED
-        end
-        forceFriction = 0.93        -- 滚轮滑得稍远一点
-        lastWheel = now
-
-        -- 撞边界直接清零，避免一直顶着墙滑
+        local now = os.clock()
         local cur = canvasOf()
         local maxV = isX
             and math.max(0, frame.AbsoluteCanvasSize.X - frame.AbsoluteSize.X)
             or  math.max(0, frame.AbsoluteCanvasSize.Y - frame.AbsoluteSize.Y)
-        if (cur <= 0 and velocity < 0) or (cur >= maxV and velocity > 0) then
+
+        -- ① 立刻位移（跟手）
+        local immediate = -dz * WHEEL_STEP
+        local afterImmediate = setCanvas(cur + immediate)
+
+        -- ② 剩余惯性（连续滚轮时叠加）
+        local boosted
+        if now - lastWheel < 0.12 then
+            boosted = velocity - dz * WHEEL_SPEED * 0.45
+        else
+            boosted = -dz * WHEEL_SPEED
+        end
+        lastWheel = now
+
+        -- 撞边界：不给惯性，避免顶着墙滑
+        if (afterImmediate <= 0 and boosted < 0) or (afterImmediate >= maxV and boosted > 0) then
             velocity = 0
+            stopInertia()
             return
         end
 
+        velocity = boosted
+        forceFriction = 0.92
         startInertia()
     end)
 
