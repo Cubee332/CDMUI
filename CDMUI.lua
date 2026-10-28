@@ -225,7 +225,7 @@
 
 
 
--- CDMUI v1.9.7  移除 Body2D（游戏专属）
+-- CDMUI v1.9.7  移除游戏专属控件，文档更新
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -2134,7 +2134,7 @@ end
 
 -- ============================================================
 -- 折叠基类
--- Expand 和 Body2D 共用：
+-- Expand 基类：
 --   · 主行 + 箭头 + 子内容区
 --   · 状态存 Window.State[expandKey]
 --   · 切页时由 ExpandRestorers 统一恢复
@@ -3091,7 +3091,7 @@ function Window:_PlayIntro()
 
             -- Tab 栏整体滚动入场：
             --   「其他」先出现在最左边，然后整条 Tab 栏往右滚，
-            --   依次带出 雷达 → 战斗 → 视觉 → 枪械 → 人物
+            --   依次带出各 Tab（从最后一个到第一个）
             do
                 local n = #self.Tabs
                 if n > 0 then
