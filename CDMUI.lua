@@ -276,7 +276,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.9.1  统一连接管理（AddSignal/DisconnectAll），修复重载残留
+-- CDMUI v1.9.2  HUD 位置动态跟随夜视仪；PC/手机双模式适配
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -289,7 +289,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.9.1"
+UI.Version = "1.9.2"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4026,7 +4026,37 @@ do
     --   HUD 底边要落在 843（往上留 6px）
     --   AnchorPoint 用 (0,1)，Position.Y 直接给 843 就行
     local BOX_X = 12
-    local BOX_TOP_Y = 843      -- HUD 底边的绝对 Y 坐标
+    -- HUD 底边的绝对 Y：动态跟随夜视仪框（不写死，手机端屏幕高度不同）
+    local function getNvgTopY()
+        local pgv = nil
+        pcall(function()
+            local plrs = game:GetService("Players")
+            local me = plrs and plrs.LocalPlayer
+            pgv = me and me:FindFirstChild("PlayerGui")
+        end)
+        if pgv then
+            local nvg = pgv:FindFirstChild("NightVisionHUD")
+            if nvg then
+                local stack = {nvg}
+                while #stack > 0 do
+                    local cur = table.remove(stack)
+                    for _, c in ipairs(cur:GetChildren()) do
+                        if c.Name == "Borders" and c:IsA("ImageLabel") then
+                            local y = c.AbsolutePosition.Y
+                            if y > 50 then return y end
+                        end
+                        table.insert(stack, c)
+                    end
+                end
+            end
+        end
+        -- 兜底：按屏幕高度比例算（夜视仪在底部约 84% 处）
+        local cam = workspace.CurrentCamera
+        local vh = cam and cam.ViewportSize.Y or 1009
+        return math.floor(vh * 0.841)
+    end
+
+    local BOX_TOP_Y = getNvgTopY()   -- HUD 底边贴着这个 Y 往上 6px
     local PAD_X    = IS_MOBILE and 16 or 14
     local PAD_Y    = IS_MOBILE and 10 or 8
     local ROW_H    = IS_MOBILE and 26 or 20
@@ -4085,15 +4115,16 @@ do
         if not hudFrame then return end
 
         local homeX = hudFrame.Position.X.Offset
-        local fullH = desiredHeight(3)   -- 固定 84，不读当前尺寸
+        local homeY = hudFrame.Position.Y.Offset
+        local fullH = desiredHeight(3)
 
-        -- 起点：左移 40px + 高度压到 0
-        hudFrame.Position = UDim2.new(0, homeX - 40, 0, hudFrame.Position.Y.Offset)
-        hudFrame.Size = UDim2.fromOffset(BOX_W, 84)   -- 直接给满高，避免初始化时为 0
+        -- 起点：左移 40px + 高度 0 + 底边对齐（展开时向上长）
+        hudFrame.Position = UDim2.new(0, homeX - 40, 0, homeY + fullH)
+        hudFrame.Size = UDim2.fromOffset(BOX_W, 0)
 
         local info = TweenInfo.new(0.38, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
         local tw = TweenService:Create(hudFrame, info, {
-            Position = UDim2.new(0, homeX, 0, hudFrame.Position.Y.Offset),
+            Position = UDim2.new(0, homeX, 0, homeY),
             Size = UDim2.fromOffset(BOX_W, fullH),
         })
         tw:Play()
@@ -4107,17 +4138,19 @@ do
             return
         end
         local homeX = hudFrame.Position.X.Offset
+        local homeY = hudFrame.Position.Y.Offset
+        local fullH = desiredHeight(3)
         local info = TweenInfo.new(0.26, Enum.EasingStyle.Back, Enum.EasingDirection.In)
         local tw = TweenService:Create(hudFrame, info, {
-            Position = UDim2.new(0, homeX - 50, 0, hudFrame.Position.Y.Offset),
+            Position = UDim2.new(0, homeX - 50, 0, homeY + fullH),
             Size = UDim2.fromOffset(BOX_W, 0),
         })
         tw:Play()
         tw.Completed:Connect(function()
             -- 归位（下次打开从正确位置开始）
             if hudFrame then
-                hudFrame.Position = UDim2.new(0, homeX, 0, hudFrame.Position.Y.Offset)
-                hudFrame.Size = UDim2.fromOffset(BOX_W, desiredHeight(3))
+                hudFrame.Position = UDim2.new(0, homeX, 0, homeY)
+                hudFrame.Size = UDim2.fromOffset(BOX_W, fullH)
             end
             if onDone then onDone() end
         end)
@@ -4248,8 +4281,18 @@ do
         hudFrame = Instance.new("Frame")
         hudFrame.Name = "HudBox"
         hudFrame.AnchorPoint = Vector2.new(0, 0)   -- 左上角锚点
-        hudFrame.Position = UDim2.new(0, BOX_X, 0, 0)
-        hudFrame.Size = UDim2.fromOffset(BOX_W, 84)   -- 直接给满高（84 = 夜视仪同高）
+        hudFrame.Size = UDim2.fromOffset(BOX_W, 84)
+        -- 位置：底边贴住夜视仪顶部上方 6px
+        --   AbsolutePosition.Y = Position.Y.Offset - GuiInset.Y（实测差 58）
+        do
+            local insetY = 58
+            pcall(function()
+                local ins = game:GetService("GuiService"):GetGuiInset()
+                if typeof(ins) == "Vector2" then insetY = ins.Y end
+            end)
+            local topY = getNvgTopY() - 84 - 6 + insetY
+            hudFrame.Position = UDim2.new(0, BOX_X, 0, math.max(0, topY))
+        end
         hudFrame.BackgroundTransparency = 1
         hudFrame.BorderSizePixel = 0
         -- Frame 本身没有悬停样式，Active 只控制是否拦截输入
