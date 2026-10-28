@@ -3,7 +3,7 @@
 Roblox 控制面板 UI 库。单文件，无依赖，PC / 手机自适应。
 
 ```
-CDMUI 1.9.6
+CDMUI 1.9.7
 ```
 
 ---
@@ -26,7 +26,6 @@ CDMUI 1.9.6
   - [Divider 分隔线](#divider-分隔线)
   - [ClickableRow 可点行](#clickablerow-可点行)
   - [RowButton 行内按钮](#rowbutton-行内按钮)
-  - [Body2D 画布](#body2d-画布)
   - [Dropdown 下拉选择](#dropdown-下拉选择)
   - [Keybind 按键绑定](#keybind-按键绑定)
 - [子控件（Expand 内部）](#子控件expand-内部)
@@ -345,30 +344,6 @@ tab:RowButton({
     Desc = "恢复默认值",
     ButtonText = "执行",
     Callback = function() print("重置了") end,
-})
-```
-
-### Body2D 画布
-
-给一块空白 2D 容器，自行绘制。
-
-| 参数 | 类型 | 说明 |
-|---|---|---|
-| `Name` | string | 显示名 |
-| `Callback` | function(frame) | 传入容器 Frame |
-
-```lua
-tab:Body2D({
-    Name = "预览",
-    Callback = function(frame)
-        -- 在 frame 里自由绘制
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.fromScale(1, 1)
-        label.BackgroundTransparency = 1
-        label.Text = "自定义内容"
-        label.TextColor3 = Color3.new(1, 1, 1)
-        label.Parent = frame
-    end,
 })
 ```
 
@@ -755,6 +730,7 @@ end
 
 | 版本 | 变更 |
 |---|---|
+| 1.9.7 | 移除 Body2D（游戏专属）；文档更新 |
 | 1.9.6 | 移除 HUD（改为独立模块）；新增 Dropdown / Keybind / Notify / Dialog / Search |
 | 1.9.5 | HUD 行高修正（总高精确等于框高）|
 | 1.9.4 | HUD 间隙 8px、字号加大 |
