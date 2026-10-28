@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 1.9.7                                                 ║
+    ║  CDMUI 2.0.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -225,7 +225,7 @@
 
 
 
--- CDMUI v1.9.7  移除游戏专属控件，文档更新
+-- CDMUI v2.0.0  完善预设体系：清理重复定义，新增 Custom/Paragraph/Space/Card
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -238,7 +238,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.9.7"
+UI.Version = "2.0.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -495,7 +495,6 @@ local SIZE = {
     checkboxSm = 22,   -- 子行勾选框
 }
 UI.Theme = T
-UI.Layout = LAYOUT
 UI.Size = SIZE
 
 local FONT        = Enum.Font.Gotham
@@ -629,6 +628,9 @@ local LAYOUT = {
 
 local PANEL_W, PANEL_H = LAYOUT.panelW, LAYOUT.panelH
 local ROW_H = LAYOUT.rowH
+
+-- LAYOUT 定义完成后才能导出（之前写在前面导致是 nil）
+UI.Layout = LAYOUT
 
 local CLICK_SFX = "rbxassetid://8617766509"
 
@@ -4763,6 +4765,87 @@ function Window:EnableSearch(placeholder)
     return holder
 end
 
+-- ============================================================
+-- Window:Card 独立卡片（不属于任何 Tab，浮在面板上）
+--   cfg: Title, Text, Width, Height, Position, Closable
+-- ============================================================
+function Window:Card(cfg)
+    cfg = cfg or {}
+    local W = cfg.Width or 280
+    local H = cfg.Height or 140
+
+    local card = mk("Frame", {
+        Name = "Card",
+        Size = UDim2.fromOffset(W, H),
+        Position = cfg.Position or UDim2.new(0.5, -W/2, 0.5, -H/2),
+        BackgroundColor3 = T.panel,
+        BackgroundTransparency = 0.02,
+        BorderSizePixel = 0,
+        ZIndex = 800,
+        Active = true,
+    }, self.Gui)
+    corner(card, 10)
+    stroke(card, T.ctrlStroke, 1, 0.2)
+
+    if cfg.Title then
+        mk("TextLabel", {
+            Name = "Title",
+            Size = UDim2.new(1, -40, 0, 26),
+            Position = UDim2.fromOffset(16, 14),
+            BackgroundTransparency = 1,
+            Text = cfg.Title,
+            TextColor3 = T.text,
+            Font = FONT_BOLD,
+            TextSize = LAYOUT.rowTitle,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 801,
+            Active = false,
+        }, card)
+    end
+
+    if cfg.Text then
+        mk("TextLabel", {
+            Name = "Body",
+            Size = UDim2.new(1, -32, 1, -70),
+            Position = UDim2.fromOffset(16, 44),
+            BackgroundTransparency = 1,
+            Text = cfg.Text,
+            TextColor3 = T.textDim,
+            Font = FONT,
+            TextSize = LAYOUT.rowDesc,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 801,
+            Active = false,
+        }, card)
+    end
+
+    if cfg.Closable ~= false then
+        local x = mk("TextButton", {
+            Name = "Close",
+            Size = UDim2.fromOffset(26, 26),
+            Position = UDim2.new(1, -36, 0, 10),
+            BackgroundColor3 = T.box,
+            BackgroundTransparency = 0.4,
+            BorderSizePixel = 0,
+            Text = "\u{2715}",
+            TextColor3 = T.textDim,
+            Font = FONT_BOLD,
+            TextSize = 13,
+            AutoButtonColor = false,
+            ZIndex = 802,
+            Active = true,
+        }, card)
+        corner(x, 5)
+        bindTap(x, function()
+            if card then card:Destroy() end
+        end)
+    end
+
+    return card
+end
+
 function Window:Destroy()
     -- 清理切页恢复器，避免重载时泄漏
     self.ExpandRestorers = {}
@@ -6620,62 +6703,6 @@ function Tab:Slider(cfg)
 end
 
 -- 按键绑定：点击后按下任意键
-function Tab:Keybind(cfg)
-    local row = baseRow(self, ROW_H)
-    addTitle(row, cfg, 8)
-    addDesc(row, cfg, 30)
-
-    local key = cfg.Key or cfg.key
-    local current = cfg.Default
-    self.Window.State[key] = current
-
-    local btn = mk("TextButton", {
-        Name = "KeybindBtn",
-        Size = UDim2.new(0, LAYOUT.keybindW, 0, LAYOUT.keybindH),
-        Position = UDim2.new(1, -(LAYOUT.keybindW + 8), 0.5, -LAYOUT.keybindH / 2),
-        BackgroundColor3 = T.ctrl,
-        Text = current and current.Name or "未绑定",
-        TextColor3 = T.ctrlText,
-        Font = FONT_BOLD,
-        TextSize = LAYOUT.ctrlText,
-        AutoButtonColor = false,
-        ZIndex = 20,
-        Active = true,
-    }, row)
-    corner(btn, 5)
-    stroke(btn, T.ctrlStroke, 1, 0.4)
-
-    local listening = false
-    bindTap(btn, function()
-        listening = true
-        btn.Text = "按下按键…"
-        btn.TextColor3 = T.accent
-    end)
-
-    UserInputService.InputBegan:Connect(function(input, processed)
-        if not listening or processed then return end
-        listening = false
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            current = input.KeyCode
-            btn.Text = current.Name
-            btn.TextColor3 = T.ctrlText
-            self.Window.State[key] = current
-            if cfg.Callback then UI.safeCall(cfg.Callback, current) end
-        else
-            btn.Text = current and current.Name or "未绑定"
-            btn.TextColor3 = T.ctrlText
-        end
-    end)
-
-    local ctrl = {
-        Set = function(v) current = v; btn.Text = v and v.Name or "未绑定"; self.Window.State[key] = v end,
-        Get = function() return current end,
-    }
-    registerControl(self, key, ctrl)
-    return ctrl
-end
-
--- 多选：一组小按钮，可多选
 function Tab:MultiSelect(cfg)
     local row = baseRow(self, ROW_H + 20)
     addTitle(row, cfg, 8)
@@ -6731,6 +6758,135 @@ function Tab:MultiSelect(cfg)
             selected = t
             self.Window.State[key] = selected
         end,
+    }
+    registerControl(self, key, ctrl)
+    return ctrl
+end
+
+-- ============================================================
+-- Tab:Custom 自定义内容行
+--   用库的标准行样式（标题/描述/圆角/悬浮），内容区自己画
+--   cfg: Key, Name, Desc, Height(子区高度), Arrow(bool), Builder(frame, ctx)
+--   返回 { Frame, Child, Set/Get/Expand }
+-- ============================================================
+function Tab:Custom(cfg)
+    local key = cfg.Key or cfg.key
+    local row = baseRow(self, ROW_H)
+    -- orderBase 必须在 baseRow 之后取：
+    --   baseRow 会把 self.Items 自增，父行 LayoutOrder = 新Items * 1000，
+    --   子项要用同样的基数 +1 才排在父行正下方
+    local orderBase = self.Items
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local ARROW_W = LAYOUT.arrowSize
+    local arrowBtn
+    if cfg.Arrow ~= false then
+        arrowBtn = mk("TextButton", {
+            Name = "Arrow",
+            Size = UDim2.fromOffset(ARROW_W, ARROW_W),
+            Position = UDim2.new(1, -(ARROW_W + 12), 0.5, -ARROW_W / 2),
+            BackgroundColor3 = T.arrowBg,
+            Text = "\u{25BC}",
+            TextColor3 = T.arrowText,
+            Font = FONT_BOLD,
+            TextSize = 14,
+            AutoButtonColor = false,
+            ZIndex = 20,
+            Active = true,
+        }, row)
+        corner(arrowBtn, 6)
+        stroke(arrowBtn, T.ctrlStroke, 1, 0.5)
+    end
+
+    -- 子容器：和 Expand 同款
+    local childH = cfg.Height or 200
+    local childRow = mk("Frame", {
+        Name = "ChildRow",
+        Size = UDim2.new(1, -12, 0, 0),
+        BackgroundColor3 = T.rowChild,
+        BackgroundTransparency = 0.15,
+        BorderSizePixel = 0,
+        LayoutOrder = orderBase * 1000 + 1,
+        ClipsDescendants = true,
+        Visible = false,
+        ZIndex = 4,
+        Active = false,
+    }, self.Container)
+    corner(childRow, SIZE.radiusRow)
+    table.insert(self.Widgets, childRow)
+
+    local bar = mk("Frame", {
+        Name = "Bar",
+        Size = UDim2.new(0, 2, 1, -14),
+        Position = UDim2.new(0, 6, 0, 7),
+        BackgroundColor3 = T.accentBar,
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    }, childRow)
+    corner(bar, 1)
+
+    -- 内容区
+    local inner = mk("Frame", {
+        Name = "Inner",
+        Size = UDim2.new(1, -24, 1, -16),
+        Position = UDim2.fromOffset(12, 8),
+        BackgroundTransparency = 1,
+        ZIndex = 5,
+        Active = false,
+    }, childRow)
+
+    -- 交给调用方绘制
+    if cfg.Builder then
+        UI.safeCall(cfg.Builder, inner, {
+            Tab = self,
+            Window = self.Window,
+            Key = key,
+            Height = childH,
+        })
+    end
+
+    local open = false
+    local function setOpen(v, animate)
+        open = v and true or false
+        if open then
+            childRow.Visible = true
+            if animate then
+                tween(childRow, 0.24, { Size = UDim2.new(1, -12, 0, childH) },
+                    Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+            else
+                childRow.Size = UDim2.new(1, -12, 0, childH)
+            end
+        else
+            if animate then
+                tween(childRow, 0.18, { Size = UDim2.new(1, -12, 0, 0) },
+                    Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            else
+                childRow.Size = UDim2.new(1, -12, 0, 0)
+            end
+            task.delay(animate and 0.22 or 0, function()
+                if childRow and childRow.Parent and not open then
+                    childRow.Visible = false
+                end
+            end)
+        end
+        if arrowBtn then
+            tween(arrowBtn, 0.2, { Rotation = open and 180 or 0 })
+        end
+    end
+
+    if arrowBtn then
+        bindTap(arrowBtn, function() setOpen(not open, true) end)
+    end
+
+    local ctrl = {
+        Frame = row,
+        Child = childRow,
+        Inner = inner,
+        Set = function(v) if type(v) == "boolean" then setOpen(v, false) end end,
+        SetSilent = function(v) if type(v) == "boolean" then setOpen(v, false) end end,
+        Get = function() return open end,
+        Expand = function(v) setOpen(v, true) end,
     }
     registerControl(self, key, ctrl)
     return ctrl
@@ -6945,111 +7101,6 @@ end
 -- ============================================================
 -- Dropdown：下拉选择
 -- ============================================================
-function Tab:Dropdown(cfg)
-    local options = cfg.Options or {}
-    local key = cfg.Key or cfg.key
-    local selected = cfg.Default or options[1]
-    local rowH = ROW_H + (#options > 0 and 6 or 0)
-
-    local row = baseRow(self, rowH)
-    addTitle(row, cfg, 8)
-    addDesc(row, cfg, 30)
-    self.Window.State[key] = selected
-
-    local btn = mk("TextButton", {
-        Name = "DropdownBtn",
-        Size = UDim2.new(0, IS_MOBILE and 150 or 130, 0, 28),
-        Position = UDim2.new(1, -(IS_MOBILE and 158 or 138), 0.5, -14),
-        BackgroundColor3 = T.ctrl,
-        Text = tostring(selected),
-        TextColor3 = T.ctrlText,
-        Font = FONT_BOLD,
-        TextSize = LAYOUT.ctrlText,
-        AutoButtonColor = false,
-        ZIndex = 20,
-        Active = true,
-    }, row)
-    corner(btn, 5)
-    stroke(btn, T.ctrlStroke, 1, 0.4)
-
-    -- 下拉面板
-    local listH = math.min(#options, 6) * 26
-    local panel = mk("Frame", {
-        Name = "DropdownList",
-        Size = UDim2.new(0, IS_MOBILE and 150 or 130, 0, listH),
-        Position = UDim2.new(1, -(IS_MOBILE and 158 or 138), 1, 2),
-        BackgroundColor3 = T.row,
-        BorderSizePixel = 0,
-        Visible = false,
-        ZIndex = 50,
-    }, row)
-    corner(panel, 5)
-    stroke(panel, T.ctrlStroke, 1, 0.3)
-
-    mk("UIListLayout", {
-        Padding = UDim.new(0, 2),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    }, panel)
-    local pad = mk("UIPadding", {
-        PaddingTop = UDim.new(0, 3),
-        PaddingBottom = UDim.new(0, 3),
-        PaddingLeft = UDim.new(0, 3),
-        PaddingRight = UDim.new(0, 3),
-    }, panel)
-
-    local open = false
-    local function close()
-        open = false
-        panel.Visible = false
-    end
-
-    for i, opt in ipairs(options) do
-        local item = mk("TextButton", {
-            Name = "Opt",
-            Size = UDim2.new(1, 0, 0, 24),
-            BackgroundColor3 = (opt == selected) and T.ctrl or T.row,
-            Text = tostring(opt),
-            TextColor3 = (opt == selected) and T.accent or T.ctrlText,
-            Font = FONT,
-            TextSize = LAYOUT.rowDesc,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            AutoButtonColor = false,
-            LayoutOrder = i,
-            ZIndex = 51,
-            Active = true,
-        }, panel)
-        corner(item, 3)
-        local pd = mk("UIPadding", { PaddingLeft = UDim.new(0, 8) }, item)
-
-        bindTap(item, function()
-            selected = opt
-            btn.Text = tostring(opt)
-            self.Window.State[key] = selected
-            close()
-            if cfg.Callback then UI.safeCall(cfg.Callback, selected, i) end
-        end)
-    end
-
-    bindTap(btn, function()
-        open = not open
-        panel.Visible = open
-    end)
-
-    local ctrl = {
-        Get = function() return selected end,
-        Set = function(v)
-            selected = v
-            btn.Text = tostring(v)
-            self.Window.State[key] = v
-        end,
-    }
-    registerControl(self, key, ctrl)
-    return ctrl
-end
-
--- ============================================================
--- TextBox：文本输入（非数字）
--- ============================================================
 function Tab:TextBox(cfg)
     local row = baseRow(self, ROW_H)
     addTitle(row, cfg, 8)
@@ -7157,6 +7208,109 @@ function Tab:Progress(cfg)
     }
     registerControl(self, key, ctrl)
     return ctrl
+end
+
+-- ============================================================
+-- Tab:Paragraph 多行段落文字
+--   cfg: Name, Text / Desc, Height
+-- ============================================================
+function Tab:Paragraph(cfg)
+    local text = cfg.Text or cfg.Desc or cfg.desc or ""
+    local h = cfg.Height or (26 + math.max(1, math.floor(#text / 40)) * 20)
+
+    local row = mk("Frame", {
+        Name = "ParagraphRow",
+        Size = UDim2.new(1, -12, 0, h),
+        BackgroundColor3 = T.row,
+        BackgroundTransparency = 0.55,
+        BorderSizePixel = 0,
+        LayoutOrder = (self.Items + 1) * 1000,
+        ZIndex = 4,
+        Active = false,
+    }, self.Container)
+    corner(row, SIZE.radius)
+    self.Items = self.Items + 1
+    table.insert(self.Widgets, row)
+
+    local bar = mk("Frame", {
+        Name = "Bar",
+        Size = UDim2.new(0, 2, 1, -16),
+        Position = UDim2.fromOffset(8, 8),
+        BackgroundColor3 = T.accentBar,
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    }, row)
+    corner(bar, 1)
+
+    if cfg.Name and cfg.Name ~= "" then
+        mk("TextLabel", {
+            Name = "Title",
+            Size = UDim2.new(1, -36, 0, 22),
+            Position = UDim2.fromOffset(18, 8),
+            BackgroundTransparency = 1,
+            Text = cfg.Name,
+            TextColor3 = T.text,
+            Font = FONT_BOLD,
+            TextSize = LAYOUT.rowTitle - 2,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 5,
+            Active = false,
+        }, row)
+
+        mk("TextLabel", {
+            Name = "Body",
+            Size = UDim2.new(1, -36, 0, h - 38),
+            Position = UDim2.fromOffset(18, 32),
+            BackgroundTransparency = 1,
+            Text = text,
+            TextColor3 = T.textDim,
+            Font = FONT,
+            TextSize = LAYOUT.rowDesc - 1,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 5,
+            Active = false,
+        }, row)
+    else
+        mk("TextLabel", {
+            Name = "Body",
+            Size = UDim2.new(1, -36, 1, -16),
+            Position = UDim2.fromOffset(18, 8),
+            BackgroundTransparency = 1,
+            Text = text,
+            TextColor3 = T.textDim,
+            Font = FONT,
+            TextSize = LAYOUT.rowDesc - 1,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 5,
+            Active = false,
+        }, row)
+    end
+
+    return row
+end
+
+-- ============================================================
+-- Tab:Space 纯间隔
+--   cfg: Height（默认 8）
+-- ============================================================
+function Tab:Space(cfg)
+    local h = (type(cfg) == "number" and cfg) or (cfg and cfg.Height) or 8
+    local sp = mk("Frame", {
+        Name = "Space",
+        Size = UDim2.new(1, -12, 0, h),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        LayoutOrder = (self.Items + 1) * 1000,
+        ZIndex = 1,
+        Active = false,
+    }, self.Container)
+    self.Items = self.Items + 1
+    table.insert(self.Widgets, sp)
+    return sp
 end
 
 function Tab:Divider()
