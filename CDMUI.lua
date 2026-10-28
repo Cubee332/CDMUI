@@ -1,22 +1,24 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 1.9.4                                                 ║
+    ║  CDMUI 1.9.5                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
     目录
-      · 快速开始
-      · UI.Create 参数
-      · Window 方法
-      · 控件清单（Tab 方法）
-      · 屏幕 HUD 浮层
-      · 连接管理
-      · 平台适配
-      · 主题定制
-      · 版本历史
+      1. 快速开始
+      2. UI.Create 参数
+      3. Window 方法
+      4. 状态读写
+      5. 控件参考
+      6. 子控件（Expand 内部）
+      7. 屏幕 HUD 浮层
+      8. 连接管理
+      9. 平台适配
+     10. 主题定制
+     11. 性能选项
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  快速开始                                                     │
+    │  1. 快速开始                                                  │
     └──────────────────────────────────────────────────────────────┘
 
         local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
@@ -33,17 +35,17 @@
         })
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  UI.Create 参数                                               │
+    │  2. UI.Create 参数                                            │
     └──────────────────────────────────────────────────────────────┘
 
         Title            面板标题（默认 "控制面板"）
-        TopbarText       顶栏按钮文字
+        TopbarText       顶栏按钮文字（默认 "菜单"）
         AutoOpen         创建后是否自动显示（默认 true）
         AutoUnlockMouse  面板打开时是否解锁鼠标（默认 true）
         TopbarButton     是否生成左上角顶栏按钮（默认 true）
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  Window 方法                                                  │
+    │  3. Window 方法                                               │
     └──────────────────────────────────────────────────────────────┘
 
         win:Tab(name)               新建 Tab，返回 Tab 对象
@@ -51,9 +53,14 @@
         win:SetVisible(bool)        显示 / 隐藏面板
         win:Toggle()                切换显示状态
         win:Notify(text, sec)       弹一条提示
-        win:Destroy()               销毁面板
+        win:Destroy()               销毁面板（自动断开所有连接）
 
-        ── 状态读写 ──
+    ┌──────────────────────────────────────────────────────────────┐
+    │  4. 状态读写                                                  │
+    └──────────────────────────────────────────────────────────────┘
+
+        win.State[key] 是唯一数据源。
+
         win:Get(key)                读当前值
         win:Set(key, value)         设置值 + 重绘 + 触发回调
         win:SetSilent(key, value)   设置值 + 重绘，不触发回调
@@ -61,16 +68,32 @@
         win:RepaintAll()            把 State 全量同步到控件
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  控件清单（全部挂在 tab 上）                                   │
+    │  5. 控件参考                                                  │
     └──────────────────────────────────────────────────────────────┘
 
     ── tab:Toggle ──────────────────────────────────────────────
         Key, Name, Desc, Default, Callback(v)
-        最简单的开关，右侧勾选框。
+        右侧勾选框，最常用的开关。
+
+    ── tab:Slider ──────────────────────────────────────────────
+        Key, Name, Desc, Min, Max, Default, Step, Callback(v)
+        拖动条。手机端热区自动加宽到 44px。
+
+    ── tab:Cycle ───────────────────────────────────────────────
+        Key, Name, Desc, Options, Default, Callback(v)
+        点一下切到下一个选项。
+
+    ── tab:Input ───────────────────────────────────────────────
+        Key, Name, Desc, Placeholder, Default, Callback(text)
+        文本输入框。
+
+    ── tab:Expand ──────────────────────────────────────────────
+        Key, Name, Desc, Default, Callback(v), Children
+        可展开容器，展开/收起带高度动画。Children 里放子控件。
 
     ── tab:Section ─────────────────────────────────────────────
         Name
-        分组标题，纯视觉分隔。
+        分组标题，纯视觉分隔，无交互。
 
     ── tab:Label ───────────────────────────────────────────────
         Name, Desc
@@ -79,76 +102,71 @@
     ── tab:Divider ─────────────────────────────────────────────
         水平分隔线，无参数。
 
-    ── tab:Expand ──────────────────────────────────────────────
-        Key, Name, Desc, Default, Callback(v), Children
-        可展开的分组，Children 里放子控件。
-        展开/收起带高度动画。
-
-    ── tab:Expand 里的子控件 ───────────────────────────────────
-
-        Kind = "toggle"
-            Key, Name, Default, Callback(v)
-            子项开关，右侧勾选框。
-
-        Kind = "action"
-            点击式按钮：外观位置和勾选框一样，但没有开关状态，
-            点击只触发回调，点完自己不变。
-
-            { Kind = "action",
-              Key  = "resetPos",
-              Name = "重置位置",
-              IconImage = "rbxassetid://112173305232811",   -- 图片图标（可选）
-              IconColor = Color3.fromRGB(220, 225, 235),    -- 图标颜色（可选）
-              Icon = "\u{27F3}",                            -- 没有图片时的文字图标
-              OnClick = function() ... end }
-
-            说明：
-              · IconImage 优先级高于 Icon
-              · 图标居中显示，无背景框、无边框、悬停不变色
-              · 点击热区比图标大一圈（PC 30px / 手机 38px）
-              · 图标来源：https://github.com/Footagesus/Icons
-                例：lucide 的 fingerprint = rbxassetid://112173305232811
-
-        Kind = "slider"
-            Key, Name, Min, Max, Default, Step, Callback(v)
-
-        Kind = "input"
-            Key, Name, Default, Placeholder, Callback(text)
-
-        Kind = "cycle"
-            Key, Name, Options, Default, Callback(v)
-
-    ── tab:Slider ──────────────────────────────────────────────
-        Key, Name, Desc, Min, Max, Default, Step, Callback(v)
-        拖动条。手机端热区加宽到 44px。
-
-    ── tab:Input ───────────────────────────────────────────────
-        Key, Name, Desc, Default, Placeholder, Callback(text)
-
-    ── tab:Cycle ───────────────────────────────────────────────
-        Key, Name, Desc, Options, Default, Callback(v)
-
     ── tab:ClickableRow ────────────────────────────────────────
         Name, Desc, Callback()
-        整行可点的列表项，常用于「打开子面板」。
+        整行可点击，常用于「打开子面板」。
 
     ── tab:RowButton ───────────────────────────────────────────
         Name, Desc, ButtonText, Callback()
-        行内右侧带按钮。
+        行内右侧带一个按钮。
 
     ── tab:Body2D ──────────────────────────────────────────────
         Name, Callback(frame)
-        给一块空白 2D 画布，自行绘制。
+        给一块空白 2D 容器，自行绘制。
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  屏幕 HUD 浮层                                                │
+    │  6. 子控件（Expand 内部）                                     │
+    └──────────────────────────────────────────────────────────────┘
+
+        Children 数组里每一项用 Kind 区分类型。
+
+    ── Kind = "toggle" ─────────────────────────────────────────
+        { Kind = "toggle", Key = "sub1", Name = "子开关",
+          Default = true, Callback = function(v) end }
+
+    ── Kind = "action" ─────────────────────────────────────────
+        点击式按钮。外观位置和勾选框一样，但没有开关状态，
+        点击只触发回调，点完自己不变。
+
+        { Kind = "action",
+          Key  = "resetPos",
+          Name = "重置位置",
+          IconImage = "rbxassetid://112173305232811",  -- 图片图标（可选）
+          IconColor = Color3.fromRGB(220, 225, 235),   -- 图标颜色（可选）
+          Icon = "\u{27F3}",                           -- 没有图片时的文字图标
+          OnClick = function() end }
+
+        说明：
+          · IconImage 优先级高于 Icon
+          · 图标居中显示，无背景框、无边框、悬停不变色
+          · 点击热区比图标大一圈（PC 30px / 手机 38px）
+          · 图标库：https://github.com/Footagesus/Icons
+            例：lucide 的 fingerprint = rbxassetid://112173305232811
+
+    ── Kind = "slider" ─────────────────────────────────────────
+        { Kind = "slider", Key = "speed", Name = "速度",
+          Min = 1, Max = 100, Default = 50, Step = 1,
+          Callback = function(v) end }
+
+    ── Kind = "input" ──────────────────────────────────────────
+        { Kind = "input", Key = "name", Name = "名称",
+          Default = "", Placeholder = "输入...",
+          Callback = function(text) end }
+
+    ── Kind = "cycle" ──────────────────────────────────────────
+        { Kind = "cycle", Key = "mode", Name = "模式",
+          Options = { "A", "B", "C" }, Default = "A",
+          Callback = function(v) end }
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  7. 屏幕 HUD 浮层                                             │
     └──────────────────────────────────────────────────────────────┘
 
         屏幕角落的状态浮层，样式仿游戏自带夜视仪状态框
-        （四角括号 + 白色描边字），和夜视仪同宽同层。
+        （四角括号 + 白色描边字）。
 
         UI.SetHUDAll(fps, ping, players)
-            一次设置三项显隐（推荐，避免分次调用状态不同步）
+            一次设置三项显隐（推荐）
 
         UI.SetHUD("fps"|"ping"|"players", bool)
             单项设置
@@ -158,7 +176,7 @@
             false = 解锁：可拖动
 
         UI.ResetHUDPosition()
-            把 HUD 挪回默认位置（带弹性动画）
+            重置位置（带弹性动画）
 
         UI.DestroyHUD()
             彻底销毁
@@ -167,24 +185,25 @@
             读内部状态（调试用）
 
         特性：
-          · FPS 用真实帧采样；延迟读 Stats 的 Data Ping
+          · FPS 用真实帧采样（RenderStepped 计数）
+          · 延迟读 Stats 的 Data Ping，不是网络抖动
           · 位置自动跟随夜视仪框，间隙 8px
           · 开关时播左滑 + 展开动画（Back 缓动）
-          · 四角用游戏原图 Slice，和夜视仪完全一致
+          · 四角用原图 Slice，和夜视仪完全一致
+          · 锁定状态下整块不接收输入
 
         注意：首次调用要确保 UI 已建完，否则行显隐不生效。
               建议连续调用 2-3 次或延迟 0.3 秒后再调一次。
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  连接管理                                                     │
+    │  8. 连接管理                                                  │
     └──────────────────────────────────────────────────────────────┘
 
         全库有近百处 :Connect，如果不统一管理，重载时会残留大量
         连接，导致「重载后行为异常」这类怪 bug。
 
         UI.AddSignal(owner, conn)
-            登记一条连接。owner 可以是任何 table（Window/Tab/控件），
-            nil 表示全局。
+            登记一条连接。owner 可以是任何 table，nil 表示全局。
 
         UI.DisconnectAll(owner)
             断开某个 owner 的所有连接。
@@ -198,7 +217,7 @@
         Window:Destroy() 会自动调用 DisconnectAll(self)。
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  平台适配                                                     │
+    │  9. 平台适配                                                  │
     └──────────────────────────────────────────────────────────────┘
 
         UI.IsMobile      当前是否按手机布局渲染
@@ -214,36 +233,44 @@
             · 否则 → PC
 
         手机端会自动放大：
-            控件高度、字号、勾选框热区、滑块热区、HUD 尺寸
+            控件高度、字号、勾选框热区、滑块热区
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  主题定制                                                     │
+    │  10. 主题定制                                                 │
     └──────────────────────────────────────────────────────────────┘
 
         UI.Theme                  当前主题表（可直接改字段）
         UI.Layout                 布局尺寸表
         UI.Size                   控件尺寸表
-        UI.LowSpecMode            低配模式（跳过装饰性描边）
-        UI.SetLowSpec(bool)       开关低配模式
 
         改主题示例：
             UI.Theme.accent = Color3.fromRGB(120, 200, 255)
+            UI.Theme.panel  = Color3.fromRGB(18, 18, 22)
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  版本历史                                                     │
+    │  11. 性能选项                                                 │
     └──────────────────────────────────────────────────────────────┘
 
-        1.9.4   HUD 间隙 8px、字号加大；文档重写
-        1.9.3   HUD 行显隐修复（syncRow 无条件设 true）
-        1.9.2   HUD 位置动态跟随夜视仪；PC/手机双模式
-        1.9.1   统一连接管理（AddSignal/DisconnectAll）
-        1.9.0   新增 HUD 浮层与 action 控件；子项悬浮高亮
-        1.8.5   滑块热区优化、鼠标恢复修复
-        1.6.0   基础控件齐全
+        UI.LowSpecMode            低配模式（跳过装饰性描边）
+        UI.SetLowSpec(bool)       开关低配模式
+
+        低配设备上跳过 UIStroke 等装饰性描边，减少渲染开销。
+
+    版本历史
+      1.9.5  HUD 行高修正；文档重写
+      1.9.4  HUD 间隙 8px、字号加大
+      1.9.3  HUD 行显隐修复
+      1.9.2  HUD 位置动态跟随夜视仪；PC/手机双模式
+      1.9.1  统一连接管理（AddSignal/DisconnectAll）
+      1.9.0  新增 HUD 浮层与 action 控件
+      1.8.5  滑块热区优化、鼠标恢复修复
+      1.6.0  基础控件齐全
 ]]
 
 
--- CDMUI v1.9.4  HUD 间隙 8px、字号加大；文档重写
+
+
+-- CDMUI v1.9.5  HUD 行高修正（总高精确等于框高）；文档重写
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -256,7 +283,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.9.4"
+UI.Version = "1.9.5"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -3984,7 +4011,7 @@ do
     local BORDER_IMG = "rbxassetid://110336735200080"
 
     -- 尺寸：完全对齐夜视仪框（184 x 84，位置 12, 849）
-    local BOX_W    = IS_MOBILE and 210 or 195
+    local BOX_W    = 185      -- 和夜视仪框严格同宽（实测 184.55）
     local BOX_X   = 12
     -- 夜视仪框：顶部 y=849，高 84，底边距屏幕底 76px
     -- HUD 挂在它正上方，留 8px 间隙
@@ -4025,16 +4052,16 @@ do
 
     local HUD_GAP  = 8                       -- HUD 底边与夜视仪顶部的间隙
     local BOX_TOP_Y = getNvgTopY() - HUD_GAP  -- HUD 底边停在这里
-    local PAD_X    = IS_MOBILE and 16 or 14
-    local PAD_Y    = IS_MOBILE and 10 or 8
-    local ROW_H    = IS_MOBILE and 28 or 23
+    local PAD_X    = IS_MOBILE and 14 or 12
+    local PAD_Y    = IS_MOBILE and 6 or 5
+    local ROW_H    = IS_MOBILE and 26 or 22
     local ROW_GAP  = IS_MOBILE and 5 or 4
     local FONT_SZ  = IS_MOBILE and 22 or 18
     local LABEL_SZ = IS_MOBILE and 20 or 17
-    local BTN_W    = IS_MOBILE and 66 or 58
+    local BTN_W    = IS_MOBILE and 56 or 50
     local BTN_H    = IS_MOBILE and 22 or 18
-    local LABEL_W  = IS_MOBILE and 56 or 48
-    local BTN_FSZ  = IS_MOBILE and 15 or 13
+    local LABEL_W  = IS_MOBILE and 50 or 40
+    local BTN_FSZ  = IS_MOBILE and 13 or 12
 
     local frameCount, fpsWindow, curFPS = 0, 0, 0
     local pingSamples, curPing = {}, 0
