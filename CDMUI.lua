@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.2.1                                                 ║
+    ║  CDMUI 2.3.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -45,6 +45,41 @@
         AutoOpen         创建后是否自动显示（默认 true）
         AutoUnlockMouse  面板打开时是否解锁鼠标（默认 true）
         TopbarButton     是否生成左上角顶栏按钮（默认 true）
+
+        RealLoading      是否在加载动画里跑真实任务（默认 false）
+                         关闭时加载条只是装饰动画
+        Tasks            真实任务列表，配合 RealLoading = true 使用
+                         { { Name = "任务名", Run = function() ... end }, ... }
+                         进度条按实际完成数推进，不是固定时间表
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  2.1 加载任务（RealLoading）                                  │
+    └──────────────────────────────────────────────────────────────┘
+
+        默认关闭。开启后，加载动画会真的执行你传进去的任务，
+        进度条按实际完成数推进，而不是固定的时间表。
+
+        用途：把首次开启功能时会「卡一下」的初始化工作提前做掉。
+
+        local win = UI.Create({
+            Title = "控制面板",
+            RealLoading = true,          -- 开启真实加载
+            Tasks = {
+                { Name = "扫描容器", Run = function()
+                    -- 真实工作
+                end },
+                { Name = "预热高亮池", Run = function()
+                    -- 预建 Highlight 实例
+                end },
+            },
+        })
+
+        说明：
+          · 每个任务按顺序执行，进度 = 已完成数 / 总数
+          · 单个任务报错不会中断，只 warn 一条
+          · 最多等 15 秒，超时强制继续
+          · 全部完成后至少停留 0.3 秒，避免一闪而过
+          · 不传 RealLoading 或传 false → 走默认装饰动画
 
     ┌──────────────────────────────────────────────────────────────┐
     │  3. Window 方法                                               │
@@ -228,7 +263,7 @@
 
 
 
--- CDMUI v2.2.1  WaitForIntro 分两阶段等待（先等开始再等结束）
+-- CDMUI v2.3.0  加载动画支持真实任务（RealLoading + Tasks）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -241,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.2.1"
+UI.Version = "2.3.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2912,6 +2947,12 @@ function UI.Create(opts)
         pcall(createTopbarButton, self, self._topbarText)
     end
 
+    -- 加载任务（可选）
+    --   RealLoading = true 且传了 Tasks 才跑真实任务
+    --   默认 false：用纯装饰动画，不执行任何真实工作
+    self._realLoading = (opts.RealLoading == true)
+    self._tasks = (self._realLoading and type(opts.Tasks) == "table") and opts.Tasks or nil
+
     if opts.AutoOpen ~= false then
         self.Visible = true
         self.Gui.Enabled = true
@@ -3044,22 +3085,82 @@ function Window:_PlayIntro()
     Anim.to(splashScale, { Scale = 1 }, 0.30,
         Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
-    -- 进度推进
-    local steps = {
-        { 0.18, 0.35, "正在加载界面" },
-        { 0.38, 0.70, "正在初始化控件" },
-        { 0.58, 1.00, "准备就绪" },
-    }
-    for _, s in ipairs(steps) do
-        local at, prog, txt = s[1], s[2], s[3]
-        task.delay(at, function()
-            if not splash.Parent then return end
-            Anim.to(fill, { Size = UDim2.new(prog, 0, 1, 0) }, 0.16,
-                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-            status.Text = txt
-        end)
-    end
+    -- ===== 进度推进 =====
+    --   A. opts.Tasks 有值 → 跑真实任务，进度按实际完成推进
+    --   B. 没有 → 默认时间表（纯装饰）
     local acc = 0.58
+    local realTasks = self._tasks
+
+    if type(realTasks) == "table" and #realTasks > 0 then
+        -- 真实任务模式
+        --   Tasks = {
+        --     { Name = "加载配置", Run = function() ... end },
+        --     { Name = "初始化模块", Run = function() ... end },
+        --   }
+        local n = #realTasks
+        local done = 0
+        local startedAt = os.clock()
+
+        local function setProg(p2, txt)
+            if not splash.Parent then return end
+            Anim.to(fill, { Size = UDim2.new(math.clamp(p2, 0, 1), 0, 1, 0) }, 0.14,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+            if txt then status.Text = txt end
+        end
+
+        setProg(0, "准备加载…")
+
+        task.spawn(function()
+            for i, def in ipairs(realTasks) do
+                if not splash.Parent or UI.IsStale() or self.Destroyed then return end
+                local label = def.Name or ("步骤" .. i)
+                setProg((i - 1) / n, "正在" .. label .. "…")
+
+                local ok, err = pcall(def.Run)
+                if not ok then
+                    warn("[CDMUI] 加载任务失败(" .. label .. "): " .. tostring(err))
+                end
+
+                done = i
+                setProg(done / n, label .. " 完成")
+                RunService.RenderStepped:Wait()
+            end
+            setProg(1, "加载完成")
+        end)
+
+        -- 阻塞等任务跑完（最多 15 秒），再继续原来的淡出流程
+        local t0 = os.clock()
+        while done < n do
+            if not splash.Parent or UI.IsStale() or self.Destroyed then break end
+            if os.clock() - t0 > 15 then
+                warn("[CDMUI] 加载任务超时，强制继续")
+                break
+            end
+            task.wait(0.03)
+        end
+        -- 至少停留 0.3 秒，避免一闪而过
+        local elapsed = os.clock() - startedAt
+        if elapsed < 0.3 then task.wait(0.3 - elapsed) end
+
+        acc = 0   -- 真实模式已经等过了
+    else
+        -- 默认时间表（纯装饰）
+        local steps = {
+            { 0.18, 0.35, "正在加载界面" },
+            { 0.38, 0.70, "正在初始化控件" },
+            { 0.58, 1.00, "准备就绪" },
+        }
+        for _, s in ipairs(steps) do
+            local at, prog, txt = s[1], s[2], s[3]
+            task.delay(at, function()
+                if not splash.Parent then return end
+                Anim.to(fill, { Size = UDim2.new(prog, 0, 1, 0) }, 0.16,
+                    Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                status.Text = txt
+            end)
+        end
+        acc = 0.58
+    end
 
     -- 播放完后切主面板
     task.delay(acc + 0.30, function()
