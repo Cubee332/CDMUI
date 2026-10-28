@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.6.0  Anim 冲突管理/safeCall 错误隔离/State 单一数据源/折叠基类/完整文档
+-- CDMUI v1.6.1  顶栏退出动画改 Quad 缓动并强制归零，消除残留
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.6.0"
+UI.Version = "1.6.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -367,10 +367,35 @@ function UI.PlayExitAnim(duration)
                                 end)
                             end
                         end
-                        -- 整体缩小消失
-                        TweenService:Create(tb, TweenInfo.new(duration * 0.85, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+                        -- 整体缩小消失（用 Quad 而不是 Back，避免结尾回弹过冲）
+                        TweenService:Create(tb, TweenInfo.new(duration * 0.85, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
                             Size = UDim2.new(0, 0, 0, 44),
                         }):Play()
+
+                        -- 兜底：动画结束后强制归零，杜绝残留
+                        task.delay(duration * 0.85 + 0.04, function()
+                            if tb and tb.Parent then
+                                pcall(function()
+                                    tb.Size = UDim2.new(0, 0, 0, 44)
+                                    local inner2 = tb:FindFirstChild("IconButton")
+                                    if inner2 then inner2.BackgroundTransparency = 1 end
+                                    for _, d in ipairs(tb:GetDescendants()) do
+                                        if d:IsA("GuiObject") then
+                                            pcall(function() d.BackgroundTransparency = 1 end)
+                                        end
+                                        if d:IsA("TextLabel") or d:IsA("TextButton") then
+                                            pcall(function() d.TextTransparency = 1 end)
+                                        end
+                                        if d:IsA("ImageLabel") or d:IsA("ImageButton") then
+                                            pcall(function() d.ImageTransparency = 1 end)
+                                        end
+                                        if d:IsA("UIStroke") then
+                                            pcall(function() d.Transparency = 1 end)
+                                        end
+                                    end
+                                end)
+                            end
+                        end)
                     end)
                 end
             end)
