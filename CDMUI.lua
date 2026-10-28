@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.8.1  滚轮改为平滑趋近（目标位置+每帧插值），消除卡顿
+-- CDMUI v1.8.2  修复卸载时鼠标不恢复（final 参数+强制卸 hook）；修复悬浮刷新递归爆栈
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.8.1"
+UI.Version = "1.8.2"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1182,24 +1182,17 @@ end
 --   方案：滚动结束后主动检测鼠标落在哪个控件上，手动补发状态。
 -- ============================================================
 -- 节流：滚动时每帧最多刷一次（避免快速滚动时每像素都扫一遍）
+--   注意：不要用 task.defer 递归调用自己，会触发
+--   "Maximum re-entrancy depth exceeded"。
+--   滚动事件本身每帧都有，跳过的这一帧下次自然会被补上。
 local _hoverLastRun = 0
-local _hoverPending = false
 
 local function refreshHover(root)
     if not root or not root.Parent then return end
 
     -- 同一帧内只跑一次
     local now = os.clock()
-    if now - _hoverLastRun < 0.016 then
-        if not _hoverPending then
-            _hoverPending = true
-            task.defer(function()
-                _hoverPending = false
-                refreshHover(root)
-            end)
-        end
-        return
-    end
+    if now - _hoverLastRun < 0.016 then return end
     _hoverLastRun = now
 
     local loc = mouseToGui()
@@ -2710,7 +2703,7 @@ function UI.Create(opts)
         for _, w in ipairs(old) do
             pcall(function()
                 if type(w) == "table" and w._RestoreMouse then
-                    w:_RestoreMouse()
+                    w:_RestoreMouse(true)
                 end
             end)
         end
@@ -3627,6 +3620,8 @@ function Window:_HardLockMouse(on)
         end)
         return ok
     else
+        -- 幂等：重复调 false 不能重复减引用
+        if not self._mouseHooked then return end
         self._mouseHooked = false
         H.refCount = math.max(0, H.refCount - 1)
         if H.refCount > 0 then return end
@@ -3696,43 +3691,98 @@ end
 -- 恢复鼠标
 --   _HardLockMouse 会劫持全局 __newindex，卸掉之后游戏不会再主动把
 --   MouseBehavior 设回去，所以这里必须主动还原，否则关面板后鼠标会一直是解锁的
-function Window:_RestoreMouse()
+-- 恢复鼠标
+--   final = true：卸载/重载时用
+--     · 先把 Visible 置 false（否则下面的循环会因为「面板还开着」直接退出）
+--     · 补完写入后自己卸掉 hook
+--     · 卸掉之后游戏不一定主动写回，所以最后再补写一次
+function Window:_RestoreMouse(final)
     self._mouseLoop = false
+
+    -- 卸载时必须先标记为不可见，否则恢复循环第一轮就 break
+    if final then self.Visible = false end
 
     -- 恢复成「打开面板之前」的状态，而不是强制锁回
     local want = self._savedMouseBehavior
+    local wantIcon = self._savedMouseIcon
+
     if want == nil then
         -- 没记录过就什么都不做，交给游戏自己管
-        if self._mouseHooked then
-            self._mouseTarget = nil
+        if self._mouseHooked then self._mouseTarget = nil end
+        if final and self._mouseHooked then
+            pcall(function() self:_HardLockMouse(false) end)
         end
         return
     end
+
     _G._CDMUIMouseHook.target = want
 
-    -- hook 只在「有人写入」时才生效，所以这里自己写一次把它顶上去，
-    -- 再连写几帧防止游戏下一帧又盖回来
     task.spawn(function()
         local H = _G._CDMUIMouseHook
-        for i = 1, 30 do
-            -- 中途又被打开 / 被销毁 / 被别人接管，立刻收手
-            if self.Destroyed or self.Visible then break end
-            if H.target ~= want then break end
 
+        -- 阶段一：hook 还在，把目标值顶上去
+        for i = 1, 12 do
+            if self.Destroyed then break end
+            -- 只有被别的窗口抢走才收手（target 变 nil 说明 hook 已卸，不算抢）
+            if H.target ~= nil and H.target ~= want then break end
             pcall(function()
                 UserInputService.MouseBehavior = want
             end)
-            local ok, cur = pcall(function() return UserInputService.MouseBehavior end)
-            if ok and cur == want and i >= 3 then break end
-            task.wait(0.03)
+            task.wait(0.02)
         end
-        -- 图标也恢复
-        if self._savedMouseIcon ~= nil then
+
+        if wantIcon ~= nil then
             pcall(function()
-                UserInputService.MouseIconEnabled = self._savedMouseIcon
+                UserInputService.MouseIconEnabled = wantIcon
             end)
         end
+
+        if not final then return end
+
+        -- 阶段二（仅卸载）：强制卸掉 hook 并补写原值
+        --   用 ForceRestoreMouse 而不是 _HardLockMouse(false)：
+        --   多次重载会让 refCount 累积，普通释放卸不干净
+        self._mouseHooked = false
+        UI.ForceRestoreMouse(want, wantIcon)
     end)
+end
+
+-- 强制卸载鼠标 hook（不管引用计数）
+--   用途：卸载脚本时，之前多次重载可能把 refCount 累积成 >0，
+--        正常 _HardLockMouse(false) 一次只减 1，永远卸不掉。
+--   这里直接把 __newindex 还原成游戏原本的，并把状态清零。
+function UI.ForceRestoreMouse(wantBehavior, wantIcon)
+    local H = _G._CDMUIMouseHook
+    if not H then return end
+
+    -- 先写目标值（hook 还在，能顶住游戏覆盖）
+    if wantBehavior ~= nil then
+        pcall(function() UserInputService.MouseBehavior = wantBehavior end)
+    end
+
+    -- 强制还原 metatable
+    if H.installed and H.origNewIndex then
+        pcall(function()
+            local mt = getrawmetatable(game)
+            if not mt then return end
+            setreadonly(mt, false)
+            mt.__newindex = H.origNewIndex
+            setreadonly(mt, true)
+        end)
+    end
+
+    H.installed = false
+    H.origNewIndex = nil
+    H.target = nil
+    H.refCount = 0
+
+    -- hook 卸掉后游戏不一定主动写回，再补一次
+    if wantBehavior ~= nil then
+        pcall(function() UserInputService.MouseBehavior = wantBehavior end)
+    end
+    if wantIcon ~= nil then
+        pcall(function() UserInputService.MouseIconEnabled = wantIcon end)
+    end
 end
 
 function Window:SetVisible(visible, instant)
