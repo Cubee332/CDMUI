@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.1.0                                                 ║
+    ║  CDMUI 2.1.1                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -228,7 +228,7 @@
 
 
 
--- CDMUI v2.1.0  对齐 5 个主流 UI 库：新增依赖系统、配置存储、Tooltip
+-- CDMUI v2.1.1  Custom 注册切页恢复器；动画参数对齐 Expand
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -241,7 +241,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.1.0"
+UI.Version = "2.1.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -7072,6 +7072,29 @@ function Tab:Custom(cfg)
             end
         end
     end
+
+    -- 注册到切页恢复器：切回来时按当前状态恢复
+    --   不注册的话切页会被当成"关闭"，和其他子项行为不一致
+    local expandKey = "__custom_" .. tostring(key)
+    table.insert(self.Window.ExpandRestorers, {
+        tab = self,
+        expandKey = expandKey,
+        panelRow = row,
+        get = function() return open end,
+        apply = function(v)
+            local show = v == true
+            if show then
+                childRow.Visible = true
+                childRow.Size = UDim2.new(1, -12, 0, childH)
+            else
+                childRow.Size = UDim2.new(1, -12, 0, 0)
+                childRow.Visible = false
+            end
+            if arrowBtn then
+                arrowBtn.Rotation = show and 180 or 0
+            end
+        end,
+    })
 
     if arrowBtn then
         bindTap(arrowBtn, function() setOpen(not open, true) end)
