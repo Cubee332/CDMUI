@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.0.0                                                 ║
+    ║  CDMUI 2.1.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -14,7 +14,10 @@
       7. 连接管理
       8. 平台适配
       9. 主题定制
-     10. 性能选项
+     10. 依赖系统
+     11. 配置存储
+     12. Tooltip
+     13. 性能选项
 
     ┌──────────────────────────────────────────────────────────────┐
     │  1. 快速开始                                                  │
@@ -225,7 +228,7 @@
 
 
 
--- CDMUI v2.0.0  完善预设体系：清理重复定义，新增 Custom/Paragraph/Space/Card
+-- CDMUI v2.1.0  对齐 5 个主流 UI 库：新增依赖系统、配置存储、Tooltip
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -238,7 +241,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.0.0"
+UI.Version = "2.1.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4670,7 +4673,12 @@ function Window:Set(key, value, fireCallback)
         end
     end
 
-    -- 3) 触发业务回调（可关闭）
+    -- 3) 刷新依赖此开关的子控件
+    if type(self._RefreshDependencies) == "function" then
+        UI.safeCall(self._RefreshDependencies, self, key)
+    end
+
+    -- 4) 触发业务回调（可关闭）
     if fireCallback then
         local cb = self.OnToggle
         if type(cb) == "function" then
@@ -4763,6 +4771,189 @@ function Window:EnableSearch(placeholder)
 
     self._searchBox = holder
     return holder
+end
+
+-- ============================================================
+-- 依赖系统（Dependency）
+--   子控件可以依赖某个开关：开关关掉时自动隐藏
+--   参考 Linoria 的 AddDependencyBox / Obsidian 的 Dependency
+--   用法：
+--     local dep = win:AddDependency("masterKey", { row1, row2 })
+-- ============================================================
+function Window:AddDependency(masterKey, frames)
+    if not frames then return nil end
+    if type(frames) ~= "table" then frames = { frames } end
+
+    self._depHooks = self._depHooks or {}
+    self._depHooks[masterKey] = self._depHooks[masterKey] or {}
+
+    local function apply()
+        local on = self.State[masterKey] and true or false
+        for _, f in ipairs(frames) do
+            if f and f.Parent then
+                f.Visible = on
+            end
+        end
+    end
+
+    table.insert(self._depHooks[masterKey], apply)
+    apply()
+    return { Apply = apply }
+end
+
+-- ============================================================
+-- 配置保存 / 加载
+--   把 State 序列化成 JSON 存文件，下次进游戏自动恢复
+--   参考 Rayfield / Obsidian 的做法
+-- ============================================================
+local CONFIG_DIR = "CDMUI"
+local function ensureConfigDir()
+    pcall(function()
+        if not isfolder(CONFIG_DIR) then makefolder(CONFIG_DIR) end
+    end)
+end
+
+-- 序列化：只存基础类型
+local function serializeValue(v)
+    local tv = type(v)
+    if tv == "boolean" or tv == "number" or tv == "string" then
+        return v
+    elseif tv == "table" then
+        local out = {}
+        for k, x in pairs(v) do
+            local s = serializeValue(x)
+            if s ~= nil then out[tostring(k)] = s end
+        end
+        return out
+    end
+    return nil
+end
+
+-- 简单 JSON 编码（不依赖 HttpService）
+local function jsonEncode(v)
+    local tv = type(v)
+    if tv == "nil" then return "null" end
+    if tv == "boolean" then return v and "true" or "false" end
+    if tv == "number" then return tostring(v) end
+    if tv == "string" then
+        local s = v:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n')
+        return '"' .. s .. '"'
+    end
+    if tv == "table" then
+        -- 判断是数组还是对象
+        local isArray = true
+        local n = 0
+        for k in pairs(v) do
+            n = n + 1
+            if type(k) ~= "number" then isArray = false; break end
+        end
+        if isArray and n > 0 then
+            local parts = {}
+            for i = 1, n do parts[i] = jsonEncode(v[i]) end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+        local parts = {}
+        for k, x in pairs(v) do
+            parts[#parts + 1] = '"' .. tostring(k) .. '":' .. jsonEncode(x)
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+    return "null"
+end
+
+function Window:SaveConfig(name)
+    name = name or "default"
+    ensureConfigDir()
+    local data = {}
+    for k, v in pairs(self.State) do
+        local s = serializeValue(v)
+        if s ~= nil then data[k] = s end
+    end
+    local path = CONFIG_DIR .. "/" .. name .. ".json"
+    local ok = pcall(function()
+        writefile(path, jsonEncode(data))
+    end)
+    if ok then
+        self:Notify("配置已保存到 " .. path, 2)
+    else
+        self:Notify("保存失败（执行器不支持 writefile）", 2)
+    end
+    return ok
+end
+
+function Window:LoadConfig(name)
+    name = name or "default"
+    local path = CONFIG_DIR .. "/" .. name .. ".json"
+    local ok, content = pcall(function()
+        if isfile(path) then return readfile(path) end
+        return nil
+    end)
+    if not ok or not content then
+        self:Notify("配置文件不存在: " .. path, 2)
+        return false
+    end
+    local decoded
+    local dok = pcall(function()
+        decoded = game:GetService("HttpService"):JSONDecode(content)
+    end)
+    if not dok or type(decoded) ~= "table" then
+        self:Notify("配置文件解析失败", 2)
+        return false
+    end
+    for k, v in pairs(decoded) do
+        self:SetSilent(k, v)
+    end
+    self:Notify("配置已加载: " .. name, 2)
+    return true
+end
+
+-- ============================================================
+-- Tooltip 悬浮提示
+--   给任意控件加长按/悬浮提示
+-- ============================================================
+function UI.Tooltip(target, text, opts)
+    if not target or not text then return nil end
+    opts = opts or {}
+    local tip = nil
+    local W = opts.Width or 200
+
+    local function show()
+        if tip then return end
+        local parent = guiParent()
+        local abs = target.AbsolutePosition
+        local size = target.AbsoluteSize
+        tip = mk("TextLabel", {
+            Name = "CDMUITooltip",
+            Size = UDim2.fromOffset(W, 30),
+            Position = UDim2.fromOffset(abs.X, abs.Y - 36),
+            BackgroundColor3 = T.panel,
+            BackgroundTransparency = 0.02,
+            BorderSizePixel = 0,
+            Text = text,
+            TextColor3 = T.text,
+            Font = FONT,
+            TextSize = 13,
+            TextWrapped = true,
+            ZIndex = 3000,
+            Active = false,
+            Parent = parent,
+        })
+        corner(tip, 6)
+        stroke(tip, T.ctrlStroke, 1, 0.2)
+    end
+
+    local function hide()
+        if tip then
+            tip:Destroy()
+            tip = nil
+        end
+    end
+
+    local c1 = target.MouseEnter:Connect(show)
+    local c2 = target.MouseLeave:Connect(hide)
+    UI.AddSignal(nil, c1)
+    UI.AddSignal(nil, c2)
+    return { Show = show, Hide = hide }
 end
 
 -- ============================================================
@@ -6847,31 +7038,38 @@ function Tab:Custom(cfg)
     end
 
     local open = false
+    -- 动画参数和 Tab:Expand 完全一致（0.20 Quint Out / 0.18 Quad In / 箭头 0.30 Back Out）
     local function setOpen(v, animate)
         open = v and true or false
         if open then
             childRow.Visible = true
             if animate then
-                tween(childRow, 0.24, { Size = UDim2.new(1, -12, 0, childH) },
-                    Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+                Anim.to(childRow, { Size = UDim2.new(1, -12, 0, childH) },
+                    0.20, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
             else
                 childRow.Size = UDim2.new(1, -12, 0, childH)
             end
         else
             if animate then
-                tween(childRow, 0.18, { Size = UDim2.new(1, -12, 0, 0) },
-                    Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                Anim.to(childRow, { Size = UDim2.new(1, -12, 0, 0) },
+                    0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                task.delay(0.20, function()
+                    if childRow and childRow.Parent and not open then
+                        childRow.Visible = false
+                    end
+                end)
             else
                 childRow.Size = UDim2.new(1, -12, 0, 0)
+                childRow.Visible = false
             end
-            task.delay(animate and 0.22 or 0, function()
-                if childRow and childRow.Parent and not open then
-                    childRow.Visible = false
-                end
-            end)
         end
         if arrowBtn then
-            tween(arrowBtn, 0.2, { Rotation = open and 180 or 0 })
+            if animate then
+                Anim.to(arrowBtn, { Rotation = open and 180 or 0 }, 0.30,
+                    Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            else
+                Anim.snap(arrowBtn, { Rotation = open and 180 or 0 })
+            end
         end
     end
 
