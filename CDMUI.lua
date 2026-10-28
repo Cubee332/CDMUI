@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.1.1                                                 ║
+    ║  CDMUI 2.1.2                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -228,7 +228,7 @@
 
 
 
--- CDMUI v2.1.1  Custom 注册切页恢复器；动画参数对齐 Expand
+-- CDMUI v2.1.2  导出 UI.PlayClick，自定义控件可用同一套音效
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -241,7 +241,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.1.1"
+UI.Version = "2.1.2"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -702,6 +702,9 @@ local function playClick()
         Debris:AddItem(s, 2)
     end)
 end
+
+-- 导出：外部自定义控件也能用同一套点击音效
+UI.PlayClick = playClick
 
 -- ============================================================
 -- 错误隔离
