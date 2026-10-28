@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.2.0                                                 ║
+    ║  CDMUI 2.2.1                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -228,7 +228,7 @@
 
 
 
--- CDMUI v2.2.0  Tab 悬停高亮接入刷新系统；导出入场状态 API
+-- CDMUI v2.2.1  WaitForIntro 分两阶段等待（先等开始再等结束）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -241,7 +241,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.2.0"
+UI.Version = "2.2.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2934,13 +2934,33 @@ function Window:IsIntroPlaying()
 end
 
 -- 等入场动画结束（带超时保护）
+--   关键：必须等动画「开始」再等它「结束」
+--   否则在 _PlayIntro 还没被调用时，_introPlaying 是 nil，
+--   这里会立刻返回，导致调用方提前启动自己的东西
 function Window:WaitForIntro(timeout)
-    timeout = timeout or 5
+    timeout = timeout or 8
     local t0 = os.clock()
-    while self._introPlaying and (os.clock() - t0) < timeout do
-        task.wait(0.05)
+
+    -- 阶段 1：等入场动画开始（最多等 2 秒）
+    while not self._introPlaying do
+        if self.Destroyed then return true end
+        if (os.clock() - t0) > 2 then
+            -- 2 秒还没开始，说明这场入场不会播了（比如 AutoOpen=false）
+            return true
+        end
+        task.wait(0.03)
     end
-    return not self._introPlaying
+
+    -- 阶段 2：等入场动画结束
+    while self._introPlaying do
+        if self.Destroyed then return true end
+        if (os.clock() - t0) > timeout then return false end
+        task.wait(0.03)
+    end
+
+    -- 再多等一点点，让最后几帧的补间收尾
+    task.wait(0.08)
+    return true
 end
 
 function Window:_PlayIntro()
