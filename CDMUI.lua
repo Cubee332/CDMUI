@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 1.9.5                                                 ║
+    ║  CDMUI 1.9.6                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -11,11 +11,10 @@
       4. 状态读写
       5. 控件参考
       6. 子控件（Expand 内部）
-      7. 屏幕 HUD 浮层
-      8. 连接管理
-      9. 平台适配
-     10. 主题定制
-     11. 性能选项
+      7. 连接管理
+      8. 平台适配
+      9. 主题定制
+     10. 性能选项
 
     ┌──────────────────────────────────────────────────────────────┐
     │  1. 快速开始                                                  │
@@ -159,44 +158,7 @@
           Callback = function(v) end }
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  7. 屏幕 HUD 浮层                                             │
-    └──────────────────────────────────────────────────────────────┘
-
-        屏幕角落的状态浮层，样式仿游戏自带夜视仪状态框
-        （四角括号 + 白色描边字）。
-
-        UI.SetHUDAll(fps, ping, players)
-            一次设置三项显隐（推荐）
-
-        UI.SetHUD("fps"|"ping"|"players", bool)
-            单项设置
-
-        UI.SetHUDLocked(bool)
-            true  = 锁定：整块不接收输入，不挡后面的 UI
-            false = 解锁：可拖动
-
-        UI.ResetHUDPosition()
-            重置位置（带弹性动画）
-
-        UI.DestroyHUD()
-            彻底销毁
-
-        UI.GetHUDState()
-            读内部状态（调试用）
-
-        特性：
-          · FPS 用真实帧采样（RenderStepped 计数）
-          · 延迟读 Stats 的 Data Ping，不是网络抖动
-          · 位置自动跟随夜视仪框，间隙 8px
-          · 开关时播左滑 + 展开动画（Back 缓动）
-          · 四角用原图 Slice，和夜视仪完全一致
-          · 锁定状态下整块不接收输入
-
-        注意：首次调用要确保 UI 已建完，否则行显隐不生效。
-              建议连续调用 2-3 次或延迟 0.3 秒后再调一次。
-
-    ┌──────────────────────────────────────────────────────────────┐
-    │  8. 连接管理                                                  │
+    │  7. 连接管理                                                  │
     └──────────────────────────────────────────────────────────────┘
 
         全库有近百处 :Connect，如果不统一管理，重载时会残留大量
@@ -217,7 +179,7 @@
         Window:Destroy() 会自动调用 DisconnectAll(self)。
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  9. 平台适配                                                  │
+    │  8. 平台适配                                                  │
     └──────────────────────────────────────────────────────────────┘
 
         UI.IsMobile      当前是否按手机布局渲染
@@ -236,7 +198,7 @@
             控件高度、字号、勾选框热区、滑块热区
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  10. 主题定制                                                 │
+    │  9. 主题定制                                                 │
     └──────────────────────────────────────────────────────────────┘
 
         UI.Theme                  当前主题表（可直接改字段）
@@ -248,7 +210,7 @@
             UI.Theme.panel  = Color3.fromRGB(18, 18, 22)
 
     ┌──────────────────────────────────────────────────────────────┐
-    │  11. 性能选项                                                 │
+    │  10. 性能选项                                                 │
     └──────────────────────────────────────────────────────────────┘
 
         UI.LowSpecMode            低配模式（跳过装饰性描边）
@@ -257,12 +219,9 @@
         低配设备上跳过 UIStroke 等装饰性描边，减少渲染开销。
 
     版本历史
-      1.9.5  HUD 行高修正；文档重写
-      1.9.4  HUD 间隙 8px、字号加大
-      1.9.3  HUD 行显隐修复
-      1.9.2  HUD 位置动态跟随夜视仪；PC/手机双模式
+      1.9.2  HUD 位置动态跟随外部参照；PC/手机双模式
       1.9.1  统一连接管理（AddSignal/DisconnectAll）
-      1.9.0  新增 HUD 浮层与 action 控件
+      1.9.0  新增 action 控件
       1.8.5  滑块热区优化、鼠标恢复修复
       1.6.0  基础控件齐全
 ]]
@@ -270,7 +229,7 @@
 
 
 
--- CDMUI v1.9.5  HUD 行高修正（总高精确等于框高）；文档重写
+-- CDMUI v1.9.6  移除游戏专属内容；HUD 支持自定义参照框与外观；文档完善
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -283,7 +242,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.9.5"
+UI.Version = "1.9.6"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -3984,885 +3943,6 @@ function UI.ForceRestoreMouse(wantBehavior, wantIcon)
     end
 end
 
--- ============================================================
--- 屏幕信息 HUD（FPS / 延迟 / 服务器人数）
---   完全模仿游戏自带的夜视仪状态框：
---     · 复用同一张四角括号贴图，同款白色描边字
---     · 挂 PlayerGui、DisplayOrder = 1，和夜视仪同层
---     · 宽度取夜视仪 Status 框的宽度（277px）
---   特性：可拖动、可锁定、增减行与整体开关都带弹性动画
--- ============================================================
-UI.HUD = {}
-
-do
-    local hudGui, hudFrame, hudInner, hudCorners, hudLockBtn
-    local hudRows = {}
-    local hudConn = nil
-    local hudTweens = {}
-    local hudDragConn = nil
-
-    local showFPS, showPing, showPlayers = false, false, false
-    local hudLocked = true
-    local hudDragging = false
-    local lockTouched = false
-    local hudVisible = false
-
-    -- 夜视仪同款资源
-    local BORDER_IMG = "rbxassetid://110336735200080"
-
-    -- 尺寸：完全对齐夜视仪框（184 x 84，位置 12, 849）
-    local BOX_W    = 185      -- 和夜视仪框严格同宽（实测 184.55）
-    local BOX_X   = 12
-    -- 夜视仪框：顶部 y=849，高 84，底边距屏幕底 76px
-    -- HUD 挂在它正上方，留 8px 间隙
-    -- 用「距顶部」定位更稳：
-    --   夜视仪框顶部在 y=849（AbsolutePosition，含 inset 语义）
-    --   HUD 底边要落在 843（往上留 6px）
-    --   AnchorPoint 用 (0,1)，Position.Y 直接给 843 就行
-    local BOX_X = 12
-    -- HUD 底边的绝对 Y：动态跟随夜视仪框（不写死，手机端屏幕高度不同）
-    local function getNvgTopY()
-        local pgv = nil
-        pcall(function()
-            local plrs = game:GetService("Players")
-            local me = plrs and plrs.LocalPlayer
-            pgv = me and me:FindFirstChild("PlayerGui")
-        end)
-        if pgv then
-            local nvg = pgv:FindFirstChild("NightVisionHUD")
-            if nvg then
-                local stack = {nvg}
-                while #stack > 0 do
-                    local cur = table.remove(stack)
-                    for _, c in ipairs(cur:GetChildren()) do
-                        if c.Name == "Borders" and c:IsA("ImageLabel") then
-                            local y = c.AbsolutePosition.Y
-                            if y > 50 then return y end
-                        end
-                        table.insert(stack, c)
-                    end
-                end
-            end
-        end
-        -- 兜底：按屏幕高度比例算（夜视仪在底部约 84% 处）
-        local cam = workspace.CurrentCamera
-        local vh = cam and cam.ViewportSize.Y or 1009
-        return math.floor(vh * 0.841)
-    end
-
-    local HUD_GAP  = 8                       -- HUD 底边与夜视仪顶部的间隙
-    local BOX_TOP_Y = getNvgTopY() - HUD_GAP  -- HUD 底边停在这里
-    local PAD_X    = IS_MOBILE and 14 or 12
-    local PAD_Y    = IS_MOBILE and 6 or 5
-    local ROW_H    = IS_MOBILE and 26 or 22
-    local ROW_GAP  = IS_MOBILE and 5 or 4
-    local FONT_SZ  = IS_MOBILE and 22 or 18
-    local LABEL_SZ = IS_MOBILE and 20 or 17
-    local BTN_W    = IS_MOBILE and 56 or 50
-    local BTN_H    = IS_MOBILE and 22 or 18
-    local LABEL_W  = IS_MOBILE and 50 or 40
-    local BTN_FSZ  = IS_MOBILE and 13 or 12
-
-    local frameCount, fpsWindow, curFPS = 0, 0, 0
-    local pingSamples, curPing = {}, 0
-    local pingBusy = false
-
-    local statsPingItem = nil
-    pcall(function()
-        statsPingItem = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]
-    end)
-
-    local function killTween(k)
-        local tw = hudTweens[k]
-        if tw then pcall(function() tw:Cancel() end); hudTweens[k] = nil end
-    end
-
-    -- Q 弹动画：高度和位置同时过渡，底边固定不动、顶边向外弹开
-    --   只改高度的话看起来只是「拉长」，位置一起动才有「撑开」的感觉
-    local function getInsetY()
-        local y = 58
-        pcall(function()
-            local ins = game:GetService("GuiService"):GetGuiInset()
-            if typeof(ins) == "Vector2" then y = ins.Y end
-        end)
-        return y
-    end
-
-    -- 整体缩放动画：用 UIScale，不改 Size，四角不受影响
-    local hudScale = nil
-    local function ensureScale()
-        if not hudFrame then return nil end
-        if not hudScale or not hudScale.Parent then
-            hudScale = hudFrame:FindFirstChildOfClass("UIScale")
-            if not hudScale then
-                hudScale = Instance.new("UIScale")
-                hudScale.Scale = 1
-                hudScale.Parent = hudFrame
-            end
-        end
-        return hudScale
-    end
-
-    -- 入场：从左滑入 + 展开（高度从 0 撑到满）
-    local function popIn()
-        local sc = ensureScale()
-        if sc then sc.Scale = 1 end
-        if not hudFrame then return end
-
-        local homeX = hudFrame.Position.X.Offset
-        local homeY = hudFrame.Position.Y.Offset
-        local fullH = desiredHeight(3)
-
-        -- 起点：左移 40px + 高度 0 + 底边对齐（展开时向上长）
-        hudFrame.Position = UDim2.new(0, homeX - 40, 0, homeY + fullH)
-        hudFrame.Size = UDim2.fromOffset(BOX_W, 0)
-
-        local info = TweenInfo.new(0.38, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-        local tw = TweenService:Create(hudFrame, info, {
-            Position = UDim2.new(0, homeX, 0, homeY),
-            Size = UDim2.fromOffset(BOX_W, fullH),
-        })
-        tw:Play()
-        hudTweens.size = tw
-    end
-
-    -- 出场：往左滑出 + 收起
-    local function popOut(onDone)
-        if not hudFrame then
-            if onDone then onDone() end
-            return
-        end
-        local homeX = hudFrame.Position.X.Offset
-        local homeY = hudFrame.Position.Y.Offset
-        local fullH = desiredHeight(3)
-        local info = TweenInfo.new(0.26, Enum.EasingStyle.Back, Enum.EasingDirection.In)
-        local tw = TweenService:Create(hudFrame, info, {
-            Position = UDim2.new(0, homeX - 50, 0, homeY + fullH),
-            Size = UDim2.fromOffset(BOX_W, 0),
-        })
-        tw:Play()
-        tw.Completed:Connect(function()
-            -- 归位（下次打开从正确位置开始）
-            if hudFrame then
-                hudFrame.Position = UDim2.new(0, homeX, 0, homeY)
-                hudFrame.Size = UDim2.fromOffset(BOX_W, fullH)
-            end
-            if onDone then onDone() end
-        end)
-    end
-
-    local function tweenSize(target, instant, dur, style, dir)
-        if not hudFrame then return nil end
-        local targetH = target.Y.Offset
-        local insetY = getInsetY()
-        -- 底边固定在 BOX_TOP_Y，所以左上角 Y = BOX_TOP_Y - 高度
-        local targetTop = math.max(0, BOX_TOP_Y - targetH) + insetY
-        local targetPos = UDim2.new(0, BOX_X, 0, targetTop)
-
-        if instant then
-            killTween("size")
-            hudFrame.Size = target
-            hudFrame.Position = targetPos
-            return nil
-        end
-
-        killTween("size")
-        hudFrame.Position = UDim2.new(0, hudFrame.Position.X.Offset,
-            0, math.max(0, BOX_TOP_Y - hudFrame.Size.Y.Offset) + insetY)
-
-        local info = TweenInfo.new(dur or 0.42,
-            style or Enum.EasingStyle.Back,
-            dir or Enum.EasingDirection.Out)
-
-        local tw = TweenService:Create(hudFrame, info, {
-            Size = target,
-            Position = targetPos,
-        })
-        tw:Play(); hudTweens.size = tw
-        return tw
-    end
-
-    -- 按当前高度算左上角 Y，让底边固定落在 BOX_TOP_Y
-    local function placeHud()
-        if not hudFrame then return end
-        local h = hudFrame.Size.Y.Offset
-        if h < 1 then h = hudFrame.AbsoluteSize.Y end
-
-        -- 实测：AbsolutePosition.Y = Position.Y.Offset - GuiInset.Y
-        -- （IgnoreGuiInset=true 时 Position 从屏幕顶算起，Absolute 却从 inset 下算起）
-        -- 所以要让 Absolute 落在 wantTop，Position 要给 wantTop + insetY
-        local insetY = 58
-        pcall(function()
-            local ins = game:GetService("GuiService"):GetGuiInset()
-            if typeof(ins) == "Vector2" then insetY = ins.Y end
-        end)
-
-        local wantTop = math.max(0, BOX_TOP_Y - h)
-        hudFrame.Position = UDim2.new(0, BOX_X, 0, wantTop + insetY)
-    end
-
-    -- 高度固定 84（和夜视仪同高），四角不会变形
-    local FIXED_H = 84
-    local function desiredHeight(n)
-        if n <= 0 then return 0 end
-        return FIXED_H
-    end
-
-    local function activeRows()
-        local r = {}
-        if showFPS then table.insert(r, "fps") end
-        if showPing then table.insert(r, "ping") end
-        if showPlayers then table.insert(r, "players") end
-        return r
-    end
-
-    -- 锁定状态切换
-    --   必须在 ensureHud 之前定义：ensureHud 里会绑定按钮回调引用它
-    local function setLocked(on)
-        hudLocked = on and true or false
-
-        -- 关键：
-        --   锁定 = 整块不接收任何输入（和夜视仪一样，鼠标悬停没反应、也不挡后面 UI）
-        --   解锁 = 整块可拖动，同时按钮可点
-        --   锁定状态下按钮仍然可以点（否则解不开），靠 Active 单独控制
-        if hudFrame then
-            hudFrame.Active = not hudLocked     -- 拖动需要 Active
-        end
-        if hudInner then
-            hudInner.Active = false             -- 行内容永远不吃输入
-        end
-        if hudLockBtn then
-            hudLockBtn.Active = true            -- 按钮永远可点
-            -- 文字形式：锁定 LOCKED / 解锁 FREE
-            hudLockBtn.Text = hudLocked and "LOCKED" or "FREE"
-            hudLockBtn.TextColor3 = hudLocked
-                and Color3.fromRGB(255, 255, 255)
-                or Color3.fromRGB(255, 210, 140)
-            hudLockBtn.TextTransparency = hudLocked and 0.15 or 0
-        end
-    end
-
-    -- ===== 构建 =====
-    local function ensureHud()
-        if hudGui and hudGui.Parent then return end
-        hudRows = {}
-
-        local parent = nil
-        pcall(function()
-            local plrs = game:GetService("Players")
-            local me = plrs and plrs.LocalPlayer
-            local pgv = me and me:FindFirstChild("PlayerGui")
-            if pgv then parent = pgv end
-        end)
-        if not parent and lp then
-            pcall(function()
-                local pgv = lp:FindFirstChild("PlayerGui")
-                if pgv then parent = pgv end
-            end)
-        end
-        if not parent then parent = guiParent() end
-
-        hudGui = Instance.new("ScreenGui")
-        hudGui.Name = "CDMUI_HUD"
-        hudGui.ResetOnSpawn = false
-        hudGui.IgnoreGuiInset = true
-        -- 提到最上层：否则面板(101)会盖住 HUD，按钮点不到
-        hudGui.DisplayOrder = 200
-        hudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-        hudGui.Enabled = true
-        pcall(function() hudGui.Active = false end)
-        hudGui.Parent = parent
-
-        hudFrame = Instance.new("Frame")
-        hudFrame.Name = "HudBox"
-        hudFrame.AnchorPoint = Vector2.new(0, 0)   -- 左上角锚点
-        hudFrame.Size = UDim2.fromOffset(BOX_W, 84)
-        -- 位置：底边贴住夜视仪顶部上方 6px
-        --   AbsolutePosition.Y = Position.Y.Offset - GuiInset.Y（实测差 58）
-        do
-            local insetY = 58
-            pcall(function()
-                local ins = game:GetService("GuiService"):GetGuiInset()
-                if typeof(ins) == "Vector2" then insetY = ins.Y end
-            end)
-            local topY = getNvgTopY() - HUD_GAP - 84 + insetY
-            hudFrame.Position = UDim2.new(0, BOX_X, 0, math.max(0, topY))
-        end
-        hudFrame.BackgroundTransparency = 1
-        hudFrame.BorderSizePixel = 0
-        -- Frame 本身没有悬停样式，Active 只控制是否拦截输入
-        --   这里设 true 让子按钮能收到点击；
-        --   鼠标悬停不会改变任何外观（没有 AutoButtonColor 概念）
-        hudFrame.Active = true
-        hudFrame.Selectable = false
-        hudFrame.BackgroundTransparency = 1
-        hudFrame.ClipsDescendants = true
-        hudFrame.Parent = hudGui
-
-        -- 四角括号：和夜视仪完全一致（单图铺满 + Slice）
-        --   高度固定 84，所以四角不会变形
-        hudCorners = {}
-        local corner = Instance.new("ImageLabel")
-        corner.Name = "Borders"
-        corner.Image = BORDER_IMG
-        corner.ImageColor3 = Color3.fromRGB(255, 255, 255)
-        corner.ImageTransparency = 0.30
-        corner.BackgroundTransparency = 1
-        corner.ScaleType = Enum.ScaleType.Slice
-        corner.SliceCenter = Rect.new(500, 0, 524, 0)
-        corner.SliceScale = 1
-        corner.Size = UDim2.new(1, 0, 1, 0)
-        corner.Position = UDim2.fromOffset(0, 0)
-        corner.ZIndex = 1
-        corner.Active = false
-        corner.Selectable = false
-        corner.Parent = hudFrame
-        table.insert(hudCorners, corner)
-
-        -- 锁定按钮：夜视仪同款「白色描边文字」风格，无底色
-        hudLockBtn = Instance.new("TextButton")
-        hudLockBtn.Name = "LockBtn"
-        hudLockBtn.Size = UDim2.fromOffset(BTN_W, BTN_H)
-        hudLockBtn.AnchorPoint = Vector2.new(1, 0)
-        hudLockBtn.Position = UDim2.new(1, -10, 0, 6)
-        hudLockBtn.BackgroundTransparency = 1
-        hudLockBtn.BorderSizePixel = 0
-        hudLockBtn.AutoButtonColor = false
-        hudLockBtn.Text = "LOCKED"
-        hudLockBtn.Font = Enum.Font.Unknown
-        pcall(function()
-            hudLockBtn.FontFace = Font.new("rbxasset://fonts/families/TitilliumWeb.json",
-                Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-        end)
-        hudLockBtn.TextSize = BTN_FSZ
-        hudLockBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        hudLockBtn.TextTransparency = 0.15
-        hudLockBtn.TextStrokeTransparency = 0.55
-        hudLockBtn.Active = true
-        hudLockBtn.Selectable = false
-        hudLockBtn.ZIndex = 10
-        hudLockBtn.Parent = hudFrame
-
-        -- 点击绑定：
-        --   Activated 是 TextButton 标准事件（鼠标+触屏都触发），
-        --   再挂 InputBegan 兜底，防止某些环境下 Activated 不响应
-        -- 只用 Activated 一个事件：
-        --   之前同时挂了 Activated / MouseButton1Click / InputEnded，
-        --   点一下会连着触发好几次，状态被反复翻转，看起来像「点了就消失」
-        local lockBusy = false
-        hudLockBtn.Activated:Connect(function()
-            if lockBusy then return end
-            lockBusy = true
-            setLocked(not hudLocked)
-            task.delay(0.15, function() lockBusy = false end)
-        end)
-        -- 按钮不吃拖动：防止点击被 hudFrame 的拖动逻辑截走
-        hudLockBtn.InputBegan:Connect(function(input)
-            local ut = input.UserInputType
-            if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
-                hudDragging = false
-            end
-        end)
-
-        -- 行容器
-        hudInner = Instance.new("Frame")
-        hudInner.Name = "Rows"
-        hudInner.Size = UDim2.new(1, -PAD_X * 2, 1, -PAD_Y * 2)
-        hudInner.Position = UDim2.fromOffset(PAD_X, PAD_Y)
-        hudInner.BackgroundTransparency = 1
-        hudInner.Active = false
-        hudInner.Selectable = false
-        hudInner.ZIndex = 5
-        hudInner.Parent = hudFrame
-
-        local layout = Instance.new("UIListLayout")
-        layout.SortOrder = Enum.SortOrder.LayoutOrder
-        layout.Padding = UDim.new(0, ROW_GAP)
-        layout.Parent = hudInner
-
-        -- 一行：左侧标签 + 右侧数值（右侧给锁定按钮留出宽度）
-        local function makeRow(key, order, labelText)
-            local root = Instance.new("Frame")
-            root.Name = key .. "Row"
-            root.LayoutOrder = order
-            root.Size = UDim2.new(1, 0, 0, ROW_H)
-            root.BackgroundTransparency = 1
-            root.Active = false
-            root.Selectable = false
-            root.Visible = false
-            root.ZIndex = 5
-            root.Parent = hudInner
-
-            local label = Instance.new("TextLabel")
-            label.Name = "Label"
-            label.Size = UDim2.new(0, LABEL_W, 1, 0)
-            label.Position = UDim2.fromOffset(0, 0)
-            label.BackgroundTransparency = 1
-            -- 夜视仪同款标签字体
-            label.Font = Enum.Font.Unknown
-            pcall(function()
-                label.FontFace = Font.new("rbxasset://fonts/families/TitilliumWeb.json",
-                    Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-            end)
-            label.TextSize = LABEL_SZ
-            label.TextColor3 = Color3.fromRGB(255, 255, 255)
-            label.TextTransparency = 0.25
-            label.TextStrokeTransparency = 0.6
-            label.TextXAlignment = Enum.TextXAlignment.Left
-            label.TextYAlignment = Enum.TextYAlignment.Center
-            label.Text = labelText
-            label.Active = false
-            label.Selectable = false
-            label.ZIndex = 5
-            label.Parent = root
-
-            local value = Instance.new("TextLabel")
-            value.Name = "Value"
-            value.Size = UDim2.new(1, -LABEL_W - BTN_W - 4, 1, 0)
-            value.Position = UDim2.fromOffset(LABEL_W, 0)
-            value.BackgroundTransparency = 1
-            -- 夜视仪同款数值字体（等宽，数字不跳）
-            value.Font = Enum.Font.Unknown
-            pcall(function()
-                value.FontFace = Font.new("rbxasset://fonts/families/Inconsolata.json",
-                    Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-            end)
-            value.TextSize = FONT_SZ
-            value.TextColor3 = Color3.fromRGB(255, 255, 255)
-            value.TextTransparency = 0
-            value.TextStrokeTransparency = 0.6
-            value.TextXAlignment = Enum.TextXAlignment.Left
-            value.TextYAlignment = Enum.TextYAlignment.Center
-            value.Text = "--"
-            value.Active = false
-            value.Selectable = false
-            value.ZIndex = 5
-            value.Parent = root
-
-            return { root = root, label = label, value = value }
-        end
-
-        hudRows.fps = makeRow("fps", 1, "FPS")
-        hudRows.ping = makeRow("ping", 2, "延迟")
-        hudRows.players = makeRow("players", 3, "人数")
-    end
-
-    -- ===== 锁定 =====
-    -- ===== 拖动 =====
-    local function bindDrag()
-        if hudDragConn then return end
-
-        hudFrame.InputBegan:Connect(function(input)
-            -- 锁定时不响应拖动
-            if hudLocked then return end
-            local ut = input.UserInputType
-            if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
-                -- 点在锁定按钮上时不拖动，交给按钮自己处理
-                local btn = hudLockBtn
-                if btn then
-                    local mp = input.Position
-                    local ax, ay = btn.AbsolutePosition.X, btn.AbsolutePosition.Y
-                    local aw, ah = btn.AbsoluteSize.X, btn.AbsoluteSize.Y
-                    if mp.X >= ax and mp.X <= ax + aw and mp.Y >= ay and mp.Y <= ay + ah then
-                        return
-                    end
-                end
-                hudDragging = true
-                local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-                hudTweens.dragStart = {
-                    px = hudFrame.Position.X.Offset,
-                    py = hudFrame.Position.Y.Offset,
-                    mx = (ok and typeof(loc) == "Vector2") and loc.X or 0,
-                    my = (ok and typeof(loc) == "Vector2") and loc.Y or 0,
-                }
-            end
-        end)
-
-        hudDragConn = addDragListener(function(input)
-            local ut = input.UserInputType
-            if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
-                if input.UserInputState == Enum.UserInputState.End then
-                    hudDragging = false
-                    return
-                end
-            end
-            if not hudDragging or hudLocked then return end
-            if ut ~= Enum.UserInputType.MouseMovement and ut ~= Enum.UserInputType.Touch then return end
-            local d = hudTweens.dragStart
-            if not d then return end
-            local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
-            if not ok or typeof(loc) ~= "Vector2" then return end
-
-            -- 锚点是 (0,0)，Position 就是左上角，直接加减位移即可
-            local nx = d.px + (loc.X - d.mx)
-            local ny = d.py + (loc.Y - d.my)
-            -- 夹在屏幕内，别拖出去找不回来
-            local vx = hudGui and hudGui.AbsoluteSize.X or 1920
-            local vy = hudGui and hudGui.AbsoluteSize.Y or 1009
-            local w = hudFrame.AbsoluteSize.X
-            local h = hudFrame.AbsoluteSize.Y
-            nx = math.clamp(nx, -w + 40, vx - 40)
-            ny = math.clamp(ny, 0, vy - 30)
-
-            hudFrame.Position = UDim2.new(0, math.floor(nx), 0, math.floor(ny))
-        end)
-    end
-
-    -- ===== 刷新 =====
-    local function refreshLayout(instant)
-        if not hudFrame or not hudFrame.Parent then return end
-        local rows = activeRows()
-        local n = #rows
-
-        if n == 0 then
-            -- 出场：Q 弹缩放（整体缩到 0 再隐藏）
-            if hudVisible and hudFrame.Visible then
-                hudVisible = false
-                popOut(function()
-                    if hudFrame and not hudVisible then
-                        hudFrame.Visible = false
-                        local sc = ensureScale()
-                        if sc then sc.Scale = 1 end
-                    end
-                end)
-            else
-                hudFrame.Visible = false
-            end
-            return
-        end
-
-        local wasVisible = hudVisible
-        hudFrame.Visible = true
-        hudVisible = true
-
-        -- 首次出现时播入场动画
-        if not wasVisible then
-            popIn()
-        else
-            -- 已经显示时，确保高度是满的（防止之前被缩没）
-            if hudFrame.Size.Y.Offset < 1 then
-                hudFrame.Size = UDim2.fromOffset(BOX_W, desiredHeight(3))
-            end
-        end
-
-        -- 逐行同步显隐：新出现的行做淡入
-        local order = 0
-        local function syncRow(key, shouldShow)
-            local r = hudRows[key]
-            if not r then return end
-            -- 直接从容器里找实际对象，避免 hudRows 里存的是旧引用
-            local real = hudInner and hudInner:FindFirstChild(key .. "Row")
-            local node = real or r.root
-            if not node then return end
-
-            if shouldShow then
-                order = order + 1
-                node.LayoutOrder = order
-                node.Visible = true          -- 无条件设 true（不再判断）
-                -- 淡入只在从隐藏变显示时做
-                if r.label and r.value then
-                    r.label.TextTransparency = 0.25
-                    r.value.TextTransparency = 0
-                end
-            else
-                node.Visible = false
-            end
-        end
-
-        syncRow("fps", showFPS)
-        syncRow("ping", showPing)
-        syncRow("players", showPlayers)
-
-
-        -- 高度必须按「实际显示的行数」算，不能用 activeRows() 的结果
-        --   （activeRows 读的是标志位，若和实际 Visible 不一致就会算错）
-        local function isRowVisible(key)
-            local real = hudInner and hudInner:FindFirstChild(key .. "Row")
-            if real then return real.Visible end
-            local r = hudRows[key]
-            return r and r.root and r.root.Visible or false
-        end
-        local visN = 0
-        if isRowVisible("fps") then visN = visN + 1 end
-        if isRowVisible("ping") then visN = visN + 1 end
-        if isRowVisible("players") then visN = visN + 1 end
-        if visN == 0 then
-            hudFrame.Visible = false
-            return
-        end
-        local targetH = desiredHeight(visN)
-        tweenSize(UDim2.fromOffset(BOX_W, targetH), instant, 0.42,
-            Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-    end
-
-    local function updateText()
-        if not hudFrame or not hudFrame.Parent then return end
-        if showFPS and hudRows.fps then
-            hudRows.fps.value.Text = string.format("%d", math.floor(curFPS + 0.5))
-        end
-        if showPing and hudRows.ping then
-            hudRows.ping.value.Text = (curPing > 0)
-                and string.format("%d ms", math.floor(curPing + 0.5)) or "-- ms"
-        end
-        if showPlayers and hudRows.players then
-            hudRows.players.value.Text = string.format("%d / %d",
-                #game:GetService("Players"):GetPlayers(), 20)
-        end
-    end
-
-    -- ===== 采样 =====
-    local function pushPing(v)
-        table.insert(pingSamples, v)
-        if #pingSamples > 4 then table.remove(pingSamples, 1) end
-        local s = {}
-        for i, x in ipairs(pingSamples) do s[i] = x end
-        table.sort(s)
-        local m = #s
-        if m > 0 then
-            curPing = (m % 2 == 1) and s[(m + 1) // 2] or ((s[m // 2] + s[m // 2 + 1]) / 2)
-        end
-    end
-
-    local function doPing()
-        if pingBusy or not statsPingItem then return end
-        pingBusy = true
-        local ok, v = pcall(function() return statsPingItem:GetValue() end)
-        pingBusy = false
-        if ok and type(v) == "number" and v > 0 then pushPing(v) end
-    end
-
-    local function destroyHud()
-        if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
-        if hudDragConn then pcall(hudDragConn); hudDragConn = nil end
-        killTween("size")
-        hudRows = {}
-        hudVisible = false
-        if hudGui and hudGui.Parent then pcall(function() hudGui:Destroy() end) end
-        hudGui, hudFrame, hudInner, hudCorners, hudLockBtn = nil, nil, nil, nil, nil
-    end
-
-    local function startLoop()
-        -- 判 hudFrame 而不是 hudConn：
-        --   destroyHud 会把 hudFrame 清空但 hudConn 可能还在，
-        --   之前只判 hudConn 就会直接 return，UI 永远建不出来
-        if hudFrame and hudFrame.Parent then
-            ensureHud()
-            return
-        end
-        ensureHud()
-        bindDrag()
-        setLocked(hudLocked)
-
-        -- 创建完行后立刻同步一次显隐和高度（避免首帧行全是 hidden）
-        local rows0 = activeRows()
-        if #rows0 > 0 and hudFrame then
-            hudFrame.Visible = true
-            hudVisible = true
-            local o = 0
-            local function sync(key, on)
-                local r = hudRows[key]
-                if not r then return end
-                if on then
-                    o = o + 1
-                    r.root.LayoutOrder = o
-                    r.root.Visible = true
-                else
-                    r.root.Visible = false
-                end
-            end
-            sync("fps", showFPS)
-            sync("ping", showPing)
-            sync("players", showPlayers)
-            -- 直接算好尺寸和位置，首帧就是正确的
-            local initH = desiredHeight(#rows0)
-            hudFrame.Size = UDim2.fromOffset(BOX_W, initH)
-            hudFrame.Position = UDim2.new(0, BOX_X, 0,
-                math.max(0, BOX_TOP_Y - initH) + getInsetY())
-        end
-
-        local acc, pingAcc = 0, 0
-        hudConn = RunService.RenderStepped:Connect(function(dt)
-            frameCount = frameCount + 1
-            fpsWindow = fpsWindow + dt
-            acc = acc + dt
-            pingAcc = pingAcc + dt
-            if fpsWindow >= 0.3 then
-                curFPS = frameCount / fpsWindow
-                frameCount, fpsWindow = 0, 0
-            end
-            if pingAcc >= 0.5 then
-                pingAcc = 0
-                task.spawn(doPing)
-            end
-            if acc >= 0.15 then
-                acc = 0
-                updateText()
-                -- 每 0.15 秒钉一次行可见性
-                --   面板动画链路会反复改 Visible，与其追着改，
-                --   不如在渲染循环里持续纠正（这是最后一道防线）
-                if hudInner then
-                    local f = hudInner:FindFirstChild("fpsRow")
-                    local p2 = hudInner:FindFirstChild("pingRow")
-                    local pl = hudInner:FindFirstChild("playersRow")
-                    if f then f.Visible = showFPS and true or false end
-                    if p2 then p2.Visible = showPing and true or false end
-                    if pl then pl.Visible = showPlayers and true or false end
-                end
-            end
-        end)
-    end
-
-    local function stopLoop()
-        if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
-    end
-
-    -- ===== 对外 =====
-    -- 无论怎么调用，每次都做一次全量同步：建好缺失的 UI、同步显隐、同步高度
-    local function syncAll(instant)
-        if not hudGui or not hudGui.Parent then
-            if showFPS or showPing or showPlayers then
-                startLoop()      -- 内部会同步
-                return true
-            end
-            return false
-        end
-        refreshLayout(instant and instant or false)
-        updateText()
-        return true
-    end
-
-    -- 批量设置：一次给全三个状态，避免分三次调用时状态不同步
-    -- 建好 UI（如果还没建），然后按当前标志位刷一遍
-    --   每次都走完整流程，不依赖 startLoop 的提前返回
-    local function buildAndSync()
-        -- 1. 确保 UI 存在
-        if not hudGui or not hudGui.Parent then
-            ensureHud()
-        end
-        if not hudFrame then return end
-
-        -- 2. 确保拖拽/锁定绑定（这些只在首次需要）
-        if not hudDragConn then
-            bindDrag()
-            setLocked(hudLocked)
-        end
-
-        -- 3. 确保采样循环在跑
-        if not hudConn then
-            local acc, pingAcc = 0, 0
-            hudConn = RunService.RenderStepped:Connect(function(dt)
-                frameCount = frameCount + 1
-                fpsWindow = fpsWindow + dt
-                acc = acc + dt
-                pingAcc = pingAcc + dt
-                if fpsWindow >= 0.3 then
-                    curFPS = frameCount / fpsWindow
-                    frameCount, fpsWindow = 0, 0
-                end
-                if pingAcc >= 0.5 then
-                    pingAcc = 0
-                    task.spawn(doPing)
-                end
-                if acc >= 0.15 then
-                    acc = 0
-                    updateText()
-                end
-            end)
-        end
-
-        -- 4. 按标志位刷新（行显隐 + 高度动画都在 refreshLayout 里）
-        refreshLayout(false)
-        updateText()
-    end
-
-    function UI.SetHUDAll(fps, ping, players)
-        showFPS = fps and true or false
-        showPing = ping and true or false
-        showPlayers = players and true or false
-
-        if showFPS or showPing or showPlayers then
-            buildAndSync()
-        else
-            -- 全关：播完收缩动画再销毁
-            if hudFrame and hudFrame.Parent then
-                refreshLayout(false)
-                task.delay(0.45, function()
-                    if not (showFPS or showPing or showPlayers) then
-                        if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
-                        destroyHud()
-                    end
-                end)
-            else
-                if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
-                destroyHud()
-            end
-        end
-    end
-
-    function UI.SetHUD(kind, on)
-        if kind == "fps" then
-            showFPS = on and true or false
-        elseif kind == "ping" then
-            showPing = on and true or false
-        elseif kind == "players" then
-            showPlayers = on and true or false
-        else return end
-
-        if showFPS or showPing or showPlayers then
-            syncAll(false)
-        else
-            if hudFrame and hudFrame.Parent then
-                refreshLayout(false)
-                task.delay(0.42, function()
-                    if not (showFPS or showPing or showPlayers) then
-                        stopLoop(); destroyHud()
-                    end
-                end)
-            else
-                stopLoop(); destroyHud()
-            end
-        end
-    end
-
-    -- 重置 HUD 到默认位置
-    -- 重置位置：带弹性回弹动画，不是瞬移
-    function UI.ResetHUDPosition()
-        if not hudFrame then return end
-        local h = hudFrame.Size.Y.Offset
-        if h < 1 then h = hudFrame.AbsoluteSize.Y end
-        local target = UDim2.new(0, BOX_X, 0, math.max(0, BOX_TOP_Y - h) + getInsetY())
-
-        killTween("pos")
-        -- 用 Quad 而不是 Back：Back 的过冲太大，看着像甩出去
-        local info = TweenInfo.new(0.28,
-            Enum.EasingStyle.Quad,
-            Enum.EasingDirection.Out)
-        local tw = TweenService:Create(hudFrame, info, { Position = target })
-        tw:Play()
-        hudTweens.pos = tw
-    end
-
-    function UI.SetHUDLocked(on)
-        if not hudFrame then hudLocked = on and true or false return end
-        setLocked(on)
-    end
-
-    function UI.DestroyHUD()
-        showFPS, showPing, showPlayers = false, false, false
-        stopLoop(); destroyHud()
-    end
-
-    if lp then
-        lp.CharacterAdded:Connect(function()
-            task.wait(1)
-            if showFPS or showPing or showPlayers then
-                hudGui = nil
-                startLoop()
-            end
-        end)
-    end
-end
-
 function Window:SetVisible(visible, instant)
     if self.Destroyed then return end
     -- 加载动画进行中，外部关闭请求一律忽略
@@ -5624,6 +4704,67 @@ function Window:RepaintAll()
             end
         end
     end
+end
+
+-- ============================================================
+-- Window:EnableSearch 给顶栏加一个搜索框，实时过滤当前 Tab 的行
+-- ============================================================
+function Window:EnableSearch(placeholder)
+    if self._searchBox then return self._searchBox end
+    local topbar = self.Topbar
+    if not topbar then return nil end
+
+    local holder = mk("Frame", {
+        Name = "SearchHolder",
+        Size = UDim2.new(0, 180, 0, 26),
+        Position = UDim2.new(0.5, -90, 0.5, -13),
+        BackgroundColor3 = T.box,
+        BackgroundTransparency = 0.25,
+        BorderSizePixel = 0,
+        ZIndex = 60,
+        Active = false,
+    }, topbar)
+    corner(holder, 6)
+    stroke(holder, T.boxStroke, 1, 0.35)
+
+    local box = mk("TextBox", {
+        Name = "Input",
+        Size = UDim2.new(1, -24, 1, 0),
+        Position = UDim2.fromOffset(10, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Text = "",
+        PlaceholderText = placeholder or "搜索...",
+        PlaceholderColor3 = T.textDim,
+        TextColor3 = T.text,
+        Font = FONT,
+        TextSize = 13,
+        ClearTextOnFocus = false,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 61,
+        Active = true,
+    }, holder)
+
+    local function applyFilter()
+        local q = string.lower(box.Text or "")
+        local tab = self.Tabs and self.Tabs[self.CurrentTab]
+        if not tab or not tab.Widgets then return end
+        for _, w in ipairs(tab.Widgets) do
+            if w and w.Parent then
+                local title = ""
+                local nameLabel = w:FindFirstChild("Title", true) or w:FindFirstChild("Name", true)
+                if nameLabel and nameLabel:IsA("TextLabel") then title = nameLabel.Text end
+                local match = (q == "") or (string.find(string.lower(title), q, 1, true) ~= nil)
+                w.Visible = match
+            end
+        end
+    end
+
+    box:GetPropertyChangedSignal("Text"):Connect(applyFilter)
+    box.FocusLost:Connect(function() applyFilter() end)
+
+    self._searchBox = holder
+    return holder
 end
 
 function Window:Destroy()
@@ -6648,6 +5789,599 @@ function Tab:Cycle(cfg)
         if cfg.Callback then UI.safeCall(cfg.Callback, i, opt) end
     end)
     registerControl(self, key, ctrl)
+    return ctrl
+end
+
+-- ============================================================
+-- UI.Notify 通知
+--   右上角堆叠提示，自动消失
+--   UI.Notify(text, opts)  opts: { Duration, Title, Type }
+--   Type: "info" | "success" | "warn" | "error"
+-- ============================================================
+local notifyHolder = nil
+local notifyCount = 0
+
+local NOTIFY_COLOR = {
+    info    = Color3.fromRGB(120, 170, 255),
+    success = Color3.fromRGB(120, 220, 150),
+    warn    = Color3.fromRGB(255, 200, 100),
+    error   = Color3.fromRGB(255, 120, 120),
+}
+
+function UI.Notify(text, opts)
+    opts = opts or {}
+    local dur = opts.Duration or 3
+    local kind = opts.Type or "info"
+    local accent = NOTIFY_COLOR[kind] or NOTIFY_COLOR.info
+
+    -- 容器（首次创建）
+    if not notifyHolder or not notifyHolder.Parent then
+        local parent = guiParent()
+        notifyHolder = mk("ScreenGui", {
+            Name = "CDMUI_Notify",
+            ResetOnSpawn = false,
+            DisplayOrder = 999,
+            IgnoreGuiInset = true,
+            ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        }, parent)
+        mk("UIListLayout", {
+            Name = "Layout",
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            HorizontalAlignment = Enum.HorizontalAlignment.Right,
+            VerticalAlignment = Enum.VerticalAlignment.Top,
+            Padding = UDim.new(0, 8),
+        }, notifyHolder)
+        mk("UIPadding", {
+            Name = "Pad",
+            PaddingTop = UDim.new(0, 20),
+            PaddingRight = UDim.new(0, 20),
+        }, notifyHolder)
+    end
+
+    notifyCount = notifyCount + 1
+    local W = 280
+    local card = mk("Frame", {
+        Name = "Notify",
+        Size = UDim2.fromOffset(W, 56),
+        BackgroundColor3 = T.panel,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        LayoutOrder = notifyCount,
+        ZIndex = 1000,
+        Active = false,
+    }, notifyHolder)
+    corner(card, 8)
+    stroke(card, T.boxStroke, 1, 0.2)
+
+    -- 左侧色条
+    local bar = mk("Frame", {
+        Name = "Bar",
+        Size = UDim2.new(0, 3, 1, -16),
+        Position = UDim2.fromOffset(0, 8),
+        BackgroundColor3 = accent,
+        BorderSizePixel = 0,
+        ZIndex = 1001,
+    }, card)
+    corner(bar, 2)
+
+    mk("TextLabel", {
+        Name = "Text",
+        Size = UDim2.new(1, -28, 1, 0),
+        Position = UDim2.fromOffset(16, 0),
+        BackgroundTransparency = 1,
+        Text = tostring(text),
+        TextColor3 = T.text,
+        Font = FONT,
+        TextSize = 14,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        ZIndex = 1001,
+        Active = false,
+    }, card)
+
+    -- 入场：从右侧滑入
+    card.Position = UDim2.fromOffset(40, 0)
+    TweenService:Create(card, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        { Position = UDim2.fromOffset(0, 0) }):Play()
+
+    -- 出场
+    task.delay(dur, function()
+        if not card or not card.Parent then return end
+        local tw = TweenService:Create(card, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            { Position = UDim2.fromOffset(60, 0), BackgroundTransparency = 1 })
+        tw:Play()
+        tw.Completed:Connect(function()
+            if card then card:Destroy() end
+        end)
+    end)
+    return card
+end
+
+-- ============================================================
+-- UI.Dialog 对话框
+--   UI.Dialog({ Title, Text, Buttons, Callback })
+--   Buttons: { "确定", "取消" } 或 { {Text=..., Callback=...}, ... }
+-- ============================================================
+function UI.Dialog(opts)
+    opts = opts or {}
+    local parent = guiParent()
+
+    local overlay = mk("Frame", {
+        Name = "CDMUI_Dialog",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 0.45,
+        BorderSizePixel = 0,
+        ZIndex = 2000,
+        Active = true,
+    }, parent)
+
+    local W, H = 380, 190
+    local box = mk("Frame", {
+        Name = "Box",
+        Size = UDim2.fromOffset(W, H),
+        Position = UDim2.fromScale(0.5, 0.5),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = T.panel,
+        BackgroundTransparency = 0.02,
+        BorderSizePixel = 0,
+        ZIndex = 2001,
+        Active = true,
+    }, overlay)
+    corner(box, 10)
+    stroke(box, T.boxStroke, 1, 0.15)
+
+    mk("TextLabel", {
+        Name = "Title",
+        Size = UDim2.new(1, -40, 0, 30),
+        Position = UDim2.fromOffset(20, 18),
+        BackgroundTransparency = 1,
+        Text = tostring(opts.Title or "提示"),
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = 17,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 2002,
+        Active = false,
+    }, box)
+
+    mk("TextLabel", {
+        Name = "Body",
+        Size = UDim2.new(1, -40, 0, 70),
+        Position = UDim2.fromOffset(20, 54),
+        BackgroundTransparency = 1,
+        Text = tostring(opts.Text or ""),
+        TextColor3 = T.textDim,
+        Font = FONT,
+        TextSize = 14,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ZIndex = 2002,
+        Active = false,
+    }, box)
+
+    -- 按钮区
+    local btns = opts.Buttons or { "确定" }
+    local btnW, btnH = 90, 32
+    local totalW = #btns * btnW + (#btns - 1) * 10
+    local startX = (W - totalW) / 2
+
+    local function closeDialog()
+        if overlay then overlay:Destroy() end
+    end
+
+    for i, b in ipairs(btns) do
+        local label, cb
+        if type(b) == "table" then
+            label = b.Text or "按钮"
+            cb = b.Callback
+        else
+            label = tostring(b)
+        end
+
+        local isPrimary = (i == #btns)
+        local btn = mk("TextButton", {
+            Name = "Btn_" .. i,
+            Size = UDim2.fromOffset(btnW, btnH),
+            Position = UDim2.fromOffset(startX + (i - 1) * (btnW + 10), H - 54),
+            BackgroundColor3 = isPrimary and T.accent or T.box,
+            BackgroundTransparency = isPrimary and 0.1 or 0.3,
+            BorderSizePixel = 0,
+            Text = "",
+            AutoButtonColor = false,
+            ZIndex = 2002,
+            Active = true,
+        }, box)
+        corner(btn, 6)
+
+        mk("TextLabel", {
+            Name = "Label",
+            Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1,
+            Text = label,
+            TextColor3 = isPrimary and T.tabTextOn or T.text,
+            Font = FONT_BOLD,
+            TextSize = 14,
+            ZIndex = 2003,
+            Active = false,
+        }, btn)
+
+        bindTap(btn, function()
+            closeDialog()
+            if cb then UI.safeCall(cb) end
+            if opts.Callback then UI.safeCall(opts.Callback, i, label) end
+        end)
+    end
+
+    return { Close = closeDialog, Frame = box }
+end
+
+-- ============================================================
+-- Keybind 按键绑定
+--   点一下进入监听，按下任意键即绑定
+--   cfg: Key, Name, Desc, Default(string|Enum.KeyCode), Callback(keyCode)
+-- ============================================================
+function Tab:Keybind(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local rightOffset = cfg.RightOffset or -12
+    local current = cfg.Default
+
+    local btnW = 110
+    local btn = mk("TextButton", {
+        Name = "KeybindBtn",
+        Size = UDim2.new(0, btnW, 0, 28),
+        Position = UDim2.new(1, rightOffset - btnW, 0.5, -14),
+        BackgroundColor3 = T.box,
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 12,
+        Active = true,
+    }, row)
+    corner(btn, 4)
+    stroke(btn, T.boxStroke, 1, 0.3)
+
+    local function keyName(kc)
+        if not kc then return "未绑定" end
+        if type(kc) == "string" then return kc end
+        local ok, name = pcall(function() return kc.Name end)
+        return ok and name or "未绑定"
+    end
+
+    local btnLabel = mk("TextLabel", {
+        Name = "Label",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = keyName(current),
+        TextColor3 = T.text,
+        Font = FONT_BOLD,
+        TextSize = 13,
+        ZIndex = 13,
+        Active = false,
+    }, btn)
+
+    local listening = false
+    local listenConn = nil
+
+    local function stopListen()
+        listening = false
+        if listenConn then
+            pcall(function() listenConn:Disconnect() end)
+            listenConn = nil
+        end
+        btnLabel.Text = keyName(current)
+        btnLabel.TextColor3 = T.text
+        btn.BackgroundTransparency = 0.2
+    end
+
+    local function startListen()
+        if listening then stopListen() return end
+        listening = true
+        btnLabel.Text = "按任意键..."
+        btnLabel.TextColor3 = T.accent
+        btn.BackgroundTransparency = 0.45
+
+        listenConn = UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then return end
+            local ut = input.UserInputType
+            if ut == Enum.UserInputType.Keyboard then
+                local kc = input.KeyCode
+                if kc == Enum.KeyCode.Escape then
+                    stopListen()
+                    return
+                end
+                current = kc
+                self.Window.State[key] = kc
+                stopListen()
+                if cfg.Callback then UI.safeCall(cfg.Callback, kc) end
+            elseif ut == Enum.UserInputType.MouseButton1
+                or ut == Enum.UserInputType.MouseButton2
+                or ut == Enum.UserInputType.MouseButton3 then
+                -- 鼠标键也能绑
+                current = tostring(ut):gsub("Enum.UserInputType.", "")
+                self.Window.State[key] = current
+                stopListen()
+                if cfg.Callback then UI.safeCall(cfg.Callback, current) end
+            end
+        end)
+        UI.AddSignal(self.Window, listenConn)
+    end
+
+    bindTap(btn, startListen)
+
+    local ctrl = {
+        Set = function(v)
+            current = v
+            btnLabel.Text = keyName(v)
+            self.Window.State[key] = v
+        end,
+        SetSilent = function(v)
+            current = v
+            btnLabel.Text = keyName(v)
+        end,
+        Get = function() return current end,
+        StopListen = stopListen,
+    }
+    registerControl(self, key, ctrl)
+    self.Window.State[key] = current
+    return ctrl
+end
+
+-- ============================================================
+-- Dropdown 下拉选择
+--   点开弹出一列选项，选中后收起
+--   cfg: Key, Name, Desc, Options, Default, Multi(bool), Callback(v)
+-- ============================================================
+function Tab:Dropdown(cfg)
+    local row = baseRow(self, ROW_H)
+    addTitle(row, cfg, 8)
+    addDesc(row, cfg, 30)
+
+    local key = cfg.Key or cfg.key
+    local options = cfg.Options or { "选项1", "选项2" }
+    local multi = cfg.Multi and true or false
+    local rightOffset = cfg.RightOffset or -12
+
+    -- 当前值：单选存字符串，多选存 table
+    local selected = {}
+    if multi then
+        local d = cfg.Default
+        if type(d) == "table" then
+            for _, v in ipairs(d) do selected[v] = true end
+        end
+    else
+        selected[cfg.Default or options[1]] = true
+    end
+
+    local function getValue()
+        if multi then
+            local out = {}
+            for _, opt in ipairs(options) do
+                if selected[opt] then table.insert(out, opt) end
+            end
+            return out
+        end
+        for _, opt in ipairs(options) do
+            if selected[opt] then return opt end
+        end
+        return options[1]
+    end
+
+    local function getLabel()
+        if multi then
+            local picked = {}
+            for _, opt in ipairs(options) do
+                if selected[opt] then table.insert(picked, opt) end
+            end
+            if #picked == 0 then return "未选择" end
+            if #picked <= 2 then return table.concat(picked, ", ") end
+            return picked[1] .. " +" .. (#picked - 1)
+        end
+        return getValue()
+    end
+
+    -- 触发按钮
+    local btnW = cfg.ButtonWidth or 150
+    local btn = mk("TextButton", {
+        Name = "DropdownBtn",
+        Size = UDim2.new(0, btnW, 0, 28),
+        Position = UDim2.new(1, rightOffset - btnW, 0.5, -14),
+        BackgroundColor3 = T.box,
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 12,
+        Active = true,
+    }, row)
+    corner(btn, 4)
+    local btnStroke = stroke(btn, T.boxStroke, 1, 0.3)
+
+    local btnLabel = mk("TextLabel", {
+        Name = "Label",
+        Size = UDim2.new(1, -28, 1, 0),
+        Position = UDim2.fromOffset(10, 0),
+        BackgroundTransparency = 1,
+        Text = getLabel(),
+        TextColor3 = T.text,
+        Font = FONT,
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 13,
+        Active = false,
+    }, btn)
+
+    local arrow = mk("TextLabel", {
+        Name = "Arrow",
+        Size = UDim2.fromOffset(16, 16),
+        Position = UDim2.new(1, -20, 0.5, -8),
+        BackgroundTransparency = 1,
+        Text = "\u{25BC}",
+        TextColor3 = T.textDim,
+        Font = FONT_BOLD,
+        TextSize = 10,
+        ZIndex = 13,
+        Active = false,
+    }, btn)
+
+    -- 弹出列表（挂在窗口的 Gui 上，避免被行裁剪）
+    local popup = nil
+    local function closePopup()
+        if popup then
+            popup:Destroy()
+            popup = nil
+        end
+    end
+
+    local function openPopup()
+        if popup then return end
+        local gui = self.Window.Gui
+        if not gui then return end
+
+        local itemH = 30
+        local popupH = math.min(#options * itemH + 12, 260)
+        local absPos = btn.AbsolutePosition
+
+        popup = mk("Frame", {
+            Name = "DropdownPopup",
+            Size = UDim2.fromOffset(btnW, popupH),
+            Position = UDim2.fromOffset(absPos.X, absPos.Y + 32),
+            BackgroundColor3 = T.panel,
+            BackgroundTransparency = 0.05,
+            BorderSizePixel = 0,
+            ZIndex = 500,
+            Active = true,
+        }, gui)
+        corner(popup, 6)
+        stroke(popup, T.boxStroke, 1, 0.2)
+
+        local scroll = mk("ScrollingFrame", {
+            Name = "Scroll",
+            Size = UDim2.new(1, -8, 1, -8),
+            Position = UDim2.fromOffset(4, 4),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ScrollBarThickness = 3,
+            ScrollBarImageColor3 = T.accentBar,
+            CanvasSize = UDim2.new(0, 0, 0, #options * itemH),
+            ZIndex = 501,
+        }, popup)
+        mk("UIListLayout", {
+            Name = "Layout",
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            Padding = UDim.new(0, 2),
+        }, scroll)
+
+        for i, opt in ipairs(options) do
+            local isOn = selected[opt] and true or false
+            local item = mk("TextButton", {
+                Name = "Item_" .. i,
+                Size = UDim2.new(1, 0, 0, itemH),
+                BackgroundColor3 = T.row,
+                BackgroundTransparency = isOn and 0.3 or 0.75,
+                BorderSizePixel = 0,
+                Text = "",
+                AutoButtonColor = false,
+                LayoutOrder = i,
+                ZIndex = 502,
+                Active = true,
+            }, scroll)
+            corner(item, 4)
+
+            mk("TextLabel", {
+                Name = "Label",
+                Size = UDim2.new(1, -34, 1, 0),
+                Position = UDim2.fromOffset(10, 0),
+                BackgroundTransparency = 1,
+                Text = opt,
+                TextColor3 = isOn and T.accent or T.text,
+                Font = FONT,
+                TextSize = 14,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                ZIndex = 503,
+                Active = false,
+            }, item)
+
+            if isOn then
+                mk("TextLabel", {
+                    Name = "Check",
+                    Size = UDim2.fromOffset(16, 16),
+                    Position = UDim2.new(1, -22, 0.5, -8),
+                    BackgroundTransparency = 1,
+                    Text = "\u{2713}",
+                    TextColor3 = T.accent,
+                    Font = FONT_BOLD,
+                    TextSize = 13,
+                    ZIndex = 503,
+                    Active = false,
+                }, item)
+            end
+
+            bindTap(item, function()
+                if multi then
+                    selected[opt] = (not selected[opt]) or nil
+                    item.BackgroundTransparency = selected[opt] and 0.3 or 0.75
+                else
+                    selected = { [opt] = true }
+                    closePopup()
+                end
+                btnLabel.Text = getLabel()
+                self.Window.State[key] = getValue()
+                if cfg.Callback then UI.safeCall(cfg.Callback, getValue()) end
+            end)
+        end
+
+        -- 点外面关闭
+        local closeConn
+        closeConn = UserInputService.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1
+               and input.UserInputType ~= Enum.UserInputType.Touch then return end
+            local mp = input.Position
+            local px, py = popup.AbsolutePosition.X, popup.AbsolutePosition.Y
+            local pw, ph = popup.AbsoluteSize.X, popup.AbsoluteSize.Y
+            local bx, by = btn.AbsolutePosition.X, btn.AbsolutePosition.Y
+            local bw, bh = btn.AbsoluteSize.X, btn.AbsoluteSize.Y
+            local inPopup = mp.X >= px and mp.X <= px + pw and mp.Y >= py and mp.Y <= py + ph
+            local inBtn = mp.X >= bx and mp.X <= bx + bw and mp.Y >= by and mp.Y <= by + bh
+            if not inPopup and not inBtn then
+                closePopup()
+                if closeConn then closeConn:Disconnect(); closeConn = nil end
+            end
+        end)
+        UI.AddSignal(self.Window, closeConn)
+    end
+
+    bindTap(btn, function()
+        if popup then closePopup() else openPopup() end
+    end)
+
+    local ctrl = {
+        Set = function(v)
+            selected = {}
+            if multi then
+                if type(v) == "table" then
+                    for _, x in ipairs(v) do selected[x] = true end
+                end
+            else
+                selected[v or options[1]] = true
+            end
+            btnLabel.Text = getLabel()
+        end,
+        SetSilent = function(v) ctrl.Set(v) end,
+        Get = function() return getValue() end,
+        Close = closePopup,
+    }
+    registerControl(self, key, ctrl)
+    self.Window.State[key] = getValue()
     return ctrl
 end
 
