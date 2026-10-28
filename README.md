@@ -1,9 +1,9 @@
 # CDMUI
 
-Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC / 手机自适应
+Roblox 控制面板 UI 库。单文件，无依赖，PC / 手机自适应。
 
 ```
-CDMUI 1.9.4
+CDMUI 1.9.5
 ```
 
 ---
@@ -14,11 +14,30 @@ CDMUI 1.9.4
 - [快速开始](#快速开始)
 - [UI.Create 参数](#uicreate-参数)
 - [Window 方法](#window-方法)
-- [控件清单](#控件清单)
+- [状态读写](#状态读写)
+- [控件参考](#控件参考)
+  - [Toggle 开关](#toggle-开关)
+  - [Slider 滑条](#slider-滑条)
+  - [Cycle 循环切换](#cycle-循环切换)
+  - [Input 文本输入](#input-文本输入)
+  - [Expand 展开分组](#expand-展开分组)
+  - [Section 分组标题](#section-分组标题)
+  - [Label 纯文本](#label-纯文本)
+  - [Divider 分隔线](#divider-分隔线)
+  - [ClickableRow 可点行](#clickablerow-可点行)
+  - [RowButton 行内按钮](#rowbutton-行内按钮)
+  - [Body2D 画布](#body2d-画布)
+- [子控件（Expand 内部）](#子控件expand-内部)
+  - [Kind = toggle](#kind--toggle)
+  - [Kind = action](#kind--action)
+  - [Kind = slider](#kind--slider)
+  - [Kind = input](#kind--input)
+  - [Kind = cycle](#kind--cycle)
 - [屏幕 HUD 浮层](#屏幕-hud-浮层)
 - [连接管理](#连接管理)
 - [平台适配](#平台适配)
 - [主题定制](#主题定制)
+- [性能选项](#性能选项)
 - [版本历史](#版本历史)
 
 ---
@@ -75,7 +94,9 @@ win:Notify(text, sec)          -- 弹一条提示
 win:Destroy()                  -- 销毁面板（自动断开所有连接）
 ```
 
-### 状态读写
+---
+
+## 状态读写
 
 ```lua
 win:Get(key)                   -- 读当前值
@@ -85,13 +106,15 @@ win:SetMany({ k1 = v1, k2 = v2 })  -- 批量设置
 win:RepaintAll()               -- 把 State 全量同步到控件
 ```
 
+`win.State[key]` 是唯一数据源。控件改动会写回这里，`Set` 会触发回调，`SetSilent` 不会。
+
 ---
 
-## 控件清单
+## 控件参考
 
-### tab:Toggle
+### Toggle 开关
 
-最简单的开关，右侧勾选框。
+右侧勾选框，最常用的开关。
 
 ```lua
 tab:Toggle({
@@ -103,33 +126,52 @@ tab:Toggle({
 })
 ```
 
-### tab:Section
+### Slider 滑条
 
-分组标题，纯视觉分隔。
-
-```lua
-tab:Section("基础设置")
-```
-
-### tab:Label
-
-只显示文字，不可交互。
+拖动条，手机端热区自动加宽到 44px。
 
 ```lua
-tab:Label({ Name = "提示", Desc = "这是一段说明" })
+tab:Slider({
+    Key = "fov",
+    Name = "视野",
+    Desc = "调整相机视野",
+    Min = 70,
+    Max = 120,
+    Default = 90,
+    Step = 1,
+    Callback = function(v) print(v) end,
+})
 ```
 
-### tab:Divider
+### Cycle 循环切换
 
-水平分隔线，无参数。
+点一下切到下一个选项。
 
 ```lua
-tab:Divider()
+tab:Cycle({
+    Key = "theme",
+    Name = "主题",
+    Options = { "暗色", "亮色", "自动" },
+    Default = "暗色",
+    Callback = function(v) print(v) end,
+})
 ```
 
-### tab:Expand
+### Input 文本输入
 
-可展开的分组，展开 / 收起带高度动画。
+```lua
+tab:Input({
+    Key = "webhook",
+    Name = "Webhook",
+    Desc = "粘贴地址",
+    Placeholder = "https://...",
+    Callback = function(text) print(text) end,
+})
+```
+
+### Expand 展开分组
+
+可展开的容器，展开 / 收起带高度动画。
 
 ```lua
 tab:Expand({
@@ -139,23 +181,91 @@ tab:Expand({
     Default = false,
     Callback = function(v) end,
     Children = {
-        -- 子控件
+        -- 这里放子控件，见下一节
     },
 })
 ```
 
-### 子控件
+### Section 分组标题
 
-#### Kind = "toggle"
+纯视觉分隔，无交互。
 
 ```lua
-{ Kind = "toggle", Key = "sub1", Name = "子开关", Default = true,
+tab:Section("基础设置")
+```
+
+### Label 纯文本
+
+```lua
+tab:Label({
+    Name = "提示",
+    Desc = "这是一段说明文字",
+})
+```
+
+### Divider 分隔线
+
+```lua
+tab:Divider()
+```
+
+### ClickableRow 可点行
+
+整行可点击，常用于「打开子面板」。
+
+```lua
+tab:ClickableRow({
+    Name = "打开设置",
+    Desc = "点击进入",
+    Callback = function() end,
+})
+```
+
+### RowButton 行内按钮
+
+行内右侧带一个按钮。
+
+```lua
+tab:RowButton({
+    Name = "重置",
+    Desc = "恢复默认值",
+    ButtonText = "执行",
+    Callback = function() end,
+})
+```
+
+### Body2D 画布
+
+给一块空白 2D 容器，自行绘制。
+
+```lua
+tab:Body2D({
+    Name = "预览",
+    Callback = function(frame)
+        -- 在 frame 里自由绘制
+    end,
+})
+```
+
+---
+
+## 子控件（Expand 内部）
+
+`Children` 数组里每一项用 `Kind` 区分类型。
+
+### Kind = toggle
+
+```lua
+{ Kind = "toggle",
+  Key = "sub1",
+  Name = "子开关",
+  Default = true,
   Callback = function(v) end }
 ```
 
-#### Kind = "action"
+### Kind = action
 
-点击式按钮：外观位置和勾选框一样，但没有开关状态，点击只触发回调。
+点击式按钮。外观位置和勾选框一样，但没有开关状态，点击只触发回调，点完自己不变。
 
 ```lua
 { Kind = "action",
@@ -172,112 +282,46 @@ tab:Expand({
 - `IconImage` 优先级高于 `Icon`
 - 图标居中显示，无背景框、无边框、悬停不变色
 - 点击热区比图标大一圈（PC 30px / 手机 38px）
-- 图标来源：[Footagesus/Icons](https://github.com/Footagesus/Icons)
+- 图标库：[Footagesus/Icons](https://github.com/Footagesus/Icons)
   - 例：lucide 的 `fingerprint` = `rbxassetid://112173305232811`
 
-#### Kind = "slider"
+### Kind = slider
 
 ```lua
-{ Kind = "slider", Key = "speed", Name = "速度",
+{ Kind = "slider",
+  Key = "speed",
+  Name = "速度",
   Min = 1, Max = 100, Default = 50, Step = 1,
   Callback = function(v) end }
 ```
 
-#### Kind = "input"
+### Kind = input
 
 ```lua
-{ Kind = "input", Key = "name", Name = "名称",
-  Default = "", Placeholder = "输入...",
+{ Kind = "input",
+  Key = "name",
+  Name = "名称",
+  Default = "",
+  Placeholder = "输入...",
   Callback = function(text) end }
 ```
 
-#### Kind = "cycle"
+### Kind = cycle
 
 ```lua
-{ Kind = "cycle", Key = "mode", Name = "模式",
-  Options = { "A", "B", "C" }, Default = "A",
+{ Kind = "cycle",
+  Key = "mode",
+  Name = "模式",
+  Options = { "A", "B", "C" },
+  Default = "A",
   Callback = function(v) end }
-```
-
-### tab:Slider
-
-拖动条，手机端热区加宽到 44px。
-
-```lua
-tab:Slider({
-    Key = "fov",
-    Name = "视野",
-    Min = 70, Max = 120, Default = 90,
-    Callback = function(v) end,
-})
-```
-
-### tab:Input
-
-```lua
-tab:Input({
-    Key = "webhook",
-    Name = "Webhook",
-    Placeholder = "https://...",
-    Callback = function(text) end,
-})
-```
-
-### tab:Cycle
-
-```lua
-tab:Cycle({
-    Key = "theme",
-    Name = "主题",
-    Options = { "暗色", "亮色" },
-    Default = "暗色",
-    Callback = function(v) end,
-})
-```
-
-### tab:ClickableRow
-
-整行可点的列表项，常用于「打开子面板」。
-
-```lua
-tab:ClickableRow({
-    Name = "打开设置",
-    Desc = "点击进入",
-    Callback = function() end,
-})
-```
-
-### tab:RowButton
-
-行内右侧带按钮。
-
-```lua
-tab:RowButton({
-    Name = "重置",
-    Desc = "恢复默认",
-    ButtonText = "执行",
-    Callback = function() end,
-})
-```
-
-### tab:Body2D
-
-给一块空白 2D 画布，自行绘制。
-
-```lua
-tab:Body2D({
-    Name = "预览",
-    Callback = function(frame)
-        -- 在 frame 里自由绘制
-    end,
-})
 ```
 
 ---
 
 ## 屏幕 HUD 浮层
 
-屏幕角落的状态浮层，样式仿游戏自带夜视仪状态框（四角括号 + 白色描边字），和夜视仪同宽同层。
+屏幕角落的状态浮层，样式仿游戏自带夜视仪状态框（四角括号 + 白色描边字）。
 
 ```lua
 UI.SetHUDAll(fps, ping, players)          -- 一次设置三项显隐（推荐）
@@ -290,10 +334,11 @@ UI.GetHUDState()                          -- 读内部状态（调试用）
 
 ### 特性
 
-- FPS 用真实帧采样；延迟读 `Stats` 的 Data Ping
+- FPS 用真实帧采样（`RunService.RenderStepped` 计数）
+- 延迟读 `Stats` 服务的 Data Ping，不是网络抖动
 - 位置自动跟随夜视仪框，间隙 8px
 - 开关时播左滑 + 展开动画（Back 缓动）
-- 四角用游戏原图 Slice，和夜视仪完全一致
+- 四角用原图 Slice，和夜视仪完全一致
 - 锁定状态下整块不接收输入，不挡后面的 UI
 
 ### 注意
@@ -363,7 +408,6 @@ _G._CDMUIMobileOverride = nil     -- 恢复自动判定
 | 控件高度 | 28 | 36 |
 | 勾选框热区 | +2px | +8px |
 | 滑块热区 | 24px | 44px |
-| HUD 宽度 | 195 | 210 |
 | HUD 字号 | 17 / 18 | 20 / 22 |
 
 ---
@@ -374,8 +418,6 @@ _G._CDMUIMobileOverride = nil     -- 恢复自动判定
 UI.Theme            -- 当前主题表（可直接改字段）
 UI.Layout           -- 布局尺寸表
 UI.Size             -- 控件尺寸表
-UI.LowSpecMode      -- 低配模式（跳过装饰性描边）
-UI.SetLowSpec(bool) -- 开关低配模式
 ```
 
 ### 改主题
@@ -385,9 +427,16 @@ UI.Theme.accent = Color3.fromRGB(120, 200, 255)
 UI.Theme.panel  = Color3.fromRGB(18, 18, 22)
 ```
 
-### 低配模式
+---
 
-低配设备上跳过装饰性描边，减少渲染开销：
+## 性能选项
+
+```lua
+UI.LowSpecMode      -- 低配模式（跳过装饰性描边）
+UI.SetLowSpec(bool) -- 开关低配模式
+```
+
+低配设备上跳过 `UIStroke` 等装饰性描边，减少渲染开销：
 
 ```lua
 UI.SetLowSpec(true)
@@ -399,7 +448,8 @@ UI.SetLowSpec(true)
 
 | 版本 | 变更 |
 |---|---|
-| 1.9.4 | HUD 间隙 8px、字号加大；文档重写 |
+| 1.9.5 | HUD 行高修正（总高精确等于框高）；文档重写 |
+| 1.9.4 | HUD 间隙 8px、字号加大 |
 | 1.9.3 | HUD 行显隐修复（syncRow 无条件设 true） |
 | 1.9.2 | HUD 位置动态跟随夜视仪；PC/手机双模式 |
 | 1.9.1 | 统一连接管理（AddSignal / DisconnectAll） |
