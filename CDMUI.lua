@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 1.9.6                                                 ║
+    ║  CDMUI 1.9.7                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -108,10 +108,6 @@
     ── tab:RowButton ───────────────────────────────────────────
         Name, Desc, ButtonText, Callback()
         行内右侧带一个按钮。
-
-    ── tab:Body2D ──────────────────────────────────────────────
-        Name, Callback(frame)
-        给一块空白 2D 容器，自行绘制。
 
     ┌──────────────────────────────────────────────────────────────┐
     │  6. 子控件（Expand 内部）                                     │
@@ -229,7 +225,7 @@
 
 
 
--- CDMUI v1.9.6  移除游戏专属内容；HUD 支持自定义参照框与外观；文档完善
+-- CDMUI v1.9.7  移除 Body2D（游戏专属）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -242,7 +238,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.9.6"
+UI.Version = "1.9.7"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -6738,281 +6734,6 @@ function Tab:MultiSelect(cfg)
     }
     registerControl(self, key, ctrl)
     return ctrl
-end
--- 人体图选部位
--- 用方块拼出 R6 角色比例：
---     头部 1.0 : 躯干 2.0 宽 x 2.0 高 : 手臂 1.0 x 2.0 : 腿 1.0 x 2.0
--- 视觉上接近 Roblox 默认角色。
-function Tab:Body2D(cfg)
-    local key = cfg.Key or cfg.key
-    local parts = cfg.Parts or {
-        { Key = 1, Name = "头部" },
-        { Key = 2, Name = "躯干" },
-        { Key = 3, Name = "左臂" },
-        { Key = 4, Name = "右臂" },
-        { Key = 5, Name = "左腿" },
-        { Key = 6, Name = "右腿" },
-    }
-
-    local selected = cfg.Default or 1
-    self.Window.State[key] = selected
-
-    -- ===== 主行：和 Expand 一样，标题 + 描述 + 箭头 =====
-    local row = baseRow(self, ROW_H)
-    addTitle(row, cfg, 8)
-    addDesc(row, cfg, 30)
-
-    -- 右侧箭头
-    local ARROW_W = LAYOUT.arrowSize
-    local arrowBtn = mk("TextButton", {
-        Name = "Arrow",
-        Size = UDim2.fromOffset(ARROW_W, ARROW_W),
-        Position = UDim2.new(1, -(ARROW_W + 8), 0.5, -ARROW_W / 2),
-        BackgroundColor3 = T.arrowBg,
-        Text = "▼",
-        TextColor3 = T.arrowText,
-        Font = FONT_BOLD,
-        TextSize = 14,
-        AutoButtonColor = false,
-        ZIndex = 20,
-        Active = true,
-    }, row)
-    corner(arrowBtn, 6)
-    stroke(arrowBtn, T.ctrlStroke, 1, 0.5)
-
-    -- ===== 子项：人体图（List 的直接子元素，靠高度 0 <-> N 展开）=====
-    -- 尺寸先算出来，后面 CH_HEIGHT 和画布都要用
-    --   总宽固定 240（臂60 + 躯干120 + 臂60）
-    --   头/躯干/腿 竖着排
-    local TOTAL_W = 180
-    local S = math.floor(TOTAL_W / 4)              -- 45
-    local TW, TH = 2 * S, 2 * S                    -- 躯干 90x90
-    local HX, HY = math.floor(S * 1.35), math.floor(S * 1.35)   -- 头：正方形 60x60
-    local AW, AH = 1 * S, 2 * S                    -- 臂 45x90
-    local LW, LH = 1 * S, 2 * S                    -- 腿 45x90
-    local GAP = 3                                  -- 部件之间留缝
-    local totalW = AW + GAP + TW + GAP + AW
-    local totalH = HY + GAP + TH + GAP + LH
-    local CH_HEIGHT = totalH + 30
-    local childRow = mk("Frame", {
-        Name = "BodyChildRow",
-        Size = UDim2.new(1, -12, 0, 0),
-        BackgroundColor3 = T.rowChild,
-        BackgroundTransparency = 0.15,
-        BorderSizePixel = 0,
-        LayoutOrder = (self.Items + 1) * 1000 + 1,
-        ClipsDescendants = true,
-        Visible = false,
-        ZIndex = 4,
-        Active = false,
-    }, self.Container)
-    corner(childRow, SIZE.radiusRow)
-    table.insert(self.Widgets, childRow)
-
-    -- 左侧竖条
-    local bar = mk("Frame", {
-        Name = "Bar",
-        Size = UDim2.new(0, 2, 1, -14),
-        Position = UDim2.new(0, 6, 0, 7),
-        BackgroundColor3 = T.accentBar,
-        BorderSizePixel = 0,
-        ZIndex = 6,
-    }, childRow)
-    corner(bar, 1)
-
-    local canvas = mk("Frame", {
-        Name = "Canvas",
-        Size = UDim2.fromOffset(totalW, totalH),
-        Position = UDim2.new(0.5, -totalW / 2, 0, 16),
-        BackgroundTransparency = 1,
-        ZIndex = 5,
-    }, childRow)
-
-    local COL_IDLE = Color3.fromRGB(58, 58, 68)
-    local COL_HOVER = Color3.fromRGB(78, 78, 92)
-    local COL_ON = T.accent
-
-    local buttons = {}
-
-    local function mkPart(px, py, w, h, idx, label)
-        local b = mk("TextButton", {
-            Name = "Part" .. idx,
-            Size = UDim2.fromOffset(w, h),
-            Position = UDim2.fromOffset(px, py),
-            BackgroundColor3 = COL_IDLE,
-            BorderSizePixel = 0,
-            Text = "",
-            AutoButtonColor = false,
-            ZIndex = 6,
-            Active = true,
-        }, canvas)
-        corner(b, 3)
-
-        local lbl = mk("TextLabel", {
-            Name = "Lbl",
-            Size = UDim2.new(1, 0, 1, 0),
-            BackgroundTransparency = 1,
-            Text = label or "",
-            TextColor3 = Color3.fromRGB(150, 150, 162),
-            Font = FONT_BOLD,
-            TextSize = 12,
-            TextXAlignment = Enum.TextXAlignment.Center,
-            TextYAlignment = Enum.TextYAlignment.Center,
-            ZIndex = 7,
-            Active = false,
-        }, b)
-
-        buttons[idx] = { btn = b, lbl = lbl }
-        return b
-    end
-
-    local xArmL = 0
-    local xTorso = AW + GAP
-    local xArmR = xTorso + TW + GAP
-    local yHead = 0
-    local yTorso = HY + GAP
-    local yLegs = yTorso + TH + GAP
-
-    mkPart(xTorso + (TW - HX) / 2, yHead, HX, HY, 1, "头")
-    mkPart(xTorso, yTorso, TW, TH, 2, "躯干")
-    mkPart(xArmL, yTorso, AW, AH, 3, "左臂")
-    mkPart(xArmR, yTorso, AW, AH, 4, "右臂")
-    local legsX = xTorso + (TW - LW * 2 - GAP) / 2
-    mkPart(legsX, yLegs, LW, LH, 5, "左腿")
-    mkPart(legsX + LW + GAP, yLegs, LW, LH, 6, "右腿")
-
-    local function labelOf(idx)
-        for _, pt in ipairs(parts) do
-            if pt.Key == idx then return pt.Name end
-        end
-        return "?"
-    end
-
-    local render
-    local function setSelected(idx)
-        if not buttons[idx] then return end
-        selected = idx
-        self.Window.State[key] = idx
-        render()
-        if cfg.Callback then pcall(cfg.Callback, idx) end
-    end
-
-    render = function()
-        for idx, entry in pairs(buttons) do
-            if idx == selected then
-                entry.btn.BackgroundColor3 = COL_ON
-                pcall(function() entry.lbl.TextColor3 = Color3.fromRGB(18, 18, 22) end)
-            else
-                entry.btn.BackgroundColor3 = COL_IDLE
-                pcall(function() entry.lbl.TextColor3 = Color3.fromRGB(150, 150, 162) end)
-            end
-        end
-    end
-
-    for idx, entry in pairs(buttons) do
-        bindTap(entry.btn, function()
-            setSelected(idx)
-        end)
-        entry.btn.MouseEnter:Connect(function()
-            if idx ~= selected then
-                tween(entry.btn, 0.1, { BackgroundColor3 = COL_HOVER })
-            end
-        end)
-        entry.btn.MouseLeave:Connect(function()
-            if idx ~= selected then
-                tween(entry.btn, 0.1, { BackgroundColor3 = COL_IDLE })
-            end
-        end)
-    end
-
-    render()
-
-    -- ===== 展开/收起（走统一的折叠基类）=====
-    local fold = makeFoldable(self, {
-        expandKey = "__body2d_" .. tostring(key),
-        row = row,
-        arrow = arrowBtn,
-        arrowSize = ARROW_W,
-        onState = function(open, animate, delay)
-            if open then
-                childRow.Visible = true
-                if animate then
-                    childRow.Size = UDim2.new(1, -12, 0, 0)
-                    Anim.to(childRow, { Size = UDim2.new(1, -12, 0, CH_HEIGHT) },
-                        0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay or 0)
-                else
-                    Anim.snap(childRow, { Size = UDim2.new(1, -12, 0, CH_HEIGHT) })
-                end
-            else
-                -- 收起：动画结束后一定隐藏
-                if animate then
-                    Anim.to(childRow, { Size = UDim2.new(1, -12, 0, 0) },
-                        0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-                else
-                    Anim.snap(childRow, { Size = UDim2.new(1, -12, 0, 0) })
-                end
-                -- 直接读 State 判断（不从闭包引用 fold，避免初始化顺序问题）
-                local keyRef = "__body2d_" .. tostring(key)
-                task.delay(animate and 0.22 or 0, function()
-                    if not childRow or not childRow.Parent then return end
-                    if self.Window.State[keyRef] ~= true then
-                        childRow.Visible = false
-                    end
-                end)
-            end
-        end,
-    })
-
-    childRow:SetAttribute("__expandKey", fold.key)
-    childRow:SetAttribute("__h", CH_HEIGHT)
-
-    -- 走 bindTap：统一音效 + 位移保护 + 错误隔离
-    bindTap(arrowBtn, function()
-        fold.toggle()
-    end)
-    -- 只有右侧箭头可点，整行不响应点击
-    --   （之前有 rowHit 覆盖整行，导致点文字也会展开，容易误触）
-
-    -- 初始状态：按 State 里的值恢复（默认收起）
-    fold.setOpen(fold.isOpen(), false, 0)
-
-    -- 注册到切页恢复器，保证切回来时按当前状态恢复
-    table.insert(self.Window.ExpandRestorers, {
-        tab = self,
-        expandKey = expandKey,
-        panelRow = row,          -- 切页展开动画要对齐到主行
-        get = function() return self.Window.State[expandKey] == true end,
-        -- 注意：这里只改界面，不要改 State
-        -- setPage 会对非当前页调用 apply(false) 来隐藏，那不能覆盖用户的真实选择
-        apply = function(open)
-            local show = open == true
-            if show then
-                childRow.Visible = true
-                childRow.Size = UDim2.new(1, -12, 0, CH_HEIGHT)
-            else
-                childRow.Size = UDim2.new(1, -12, 0, 0)
-                childRow.Visible = false
-            end
-            pcall(function() arrowBtn.Rotation = show and 180 or 0 end)
-        end,
-    })
-
-    self.Items = self.Items + 1
-    self.Rows[key] = {
-        Set = function(v)
-            if type(v) == "number" then setSelected(v) end
-        end,
-        SetSilent = function(v)
-            if type(v) == "number" and buttons[v] then
-                selected = v
-                self.Window.State[key] = v
-                render()
-            end
-        end,
-        Get = function() return selected end,
-        Expand = function(open) fold.setOpen(open, true, 0) end,
-    }
-    return self.Rows[key]
 end
 
 function Tab:Section(cfg)
