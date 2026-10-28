@@ -3,7 +3,7 @@
 Roblox 控制面板 UI 库。单文件，无依赖，PC / 手机自适应。
 
 ```
-CDMUI 2.2.1
+CDMUI 2.3.0
 ```
 
 ---
@@ -13,6 +13,7 @@ CDMUI 2.2.1
 - [安装](#安装)
 - [快速开始](#快速开始)
 - [UI.Create 参数](#uicreate-参数)
+- [加载任务（预热）](#加载任务预热)
 - [Window 方法](#window-方法)
 - [状态读写](#状态读写)
 - [控件参考](#控件参考)
@@ -107,6 +108,8 @@ win:SelectTab(1)   -- 切到第一个
 | `AutoOpen` | bool | `true` | 创建后是否自动显示 |
 | `AutoUnlockMouse` | bool | `true` | 面板打开时是否解锁鼠标 |
 | `TopbarButton` | bool | `true` | 是否生成左上角顶栏按钮 |
+| `RealLoading` | bool | `false` | 加载动画是否跑真实任务 |
+| `Tasks` | table | `nil` | 真实任务列表（配 `RealLoading`）|
 
 示例：
 
@@ -119,6 +122,95 @@ local win = UI.Create({
     TopbarButton = true,
 })
 ```
+
+---
+
+## 加载任务（预热）
+
+默认关闭。开启后，加载动画会真的执行你传进去的任务，进度条按**实际完成数**推进，而不是固定的时间表。
+
+### 用途
+
+把首次开启功能时会「卡一下」的初始化工作提前做掉。
+
+### 基本用法
+
+```lua
+local win = UI.Create({
+    Title = "控制面板",
+    RealLoading = true,          -- 开启真实加载
+    Tasks = {
+        { Name = "扫描容器", Run = function()
+            local found = {}
+            for _, name in ipairs({"Characters", "Dummies", "AI"}) do
+                local f = workspace:FindFirstChild(name)
+                if f then found[#found + 1] = f end
+            end
+            _G._Containers = found
+        end },
+
+        { Name = "预热高亮池", Run = function()
+            local pool = {}
+            for i = 1, 8 do
+                local h = Instance.new("Highlight")
+                h.Name = "HL_" .. i
+                h.Enabled = false
+                h.Parent = game:GetService("Lighting")
+                pool[i] = h
+            end
+            _G._HLPool = pool
+        end },
+
+        { Name = "整理内存", Run = function()
+            collectgarbage("step")
+        end },
+    },
+})
+```
+
+### 行为说明
+
+| 项 | 说明 |
+|---|---|
+| 执行顺序 | 按 `Tasks` 数组顺序，逐个执行 |
+| 进度计算 | `已完成数 / 总数`，每个任务完成立刻推进 |
+| 错误处理 | 单个任务报错不会中断，只 `warn` 一条 |
+| 超时保护 | 最多等 15 秒，超时强制继续 |
+| 最短停留 | 全部完成后至少 0.3 秒，避免一闪而过 |
+| 关闭时 | 不传 `RealLoading` 或传 `false` → 走默认装饰动画 |
+
+### 关闭真实加载
+
+```lua
+-- 只想要装饰动画
+local win = UI.Create({
+    Title = "控制面板",
+    -- 不传 RealLoading，或传 false
+})
+```
+
+### 动态切换
+
+```lua
+local USE_REAL = true   -- 改这里控制
+
+local win = UI.Create({
+    Title = "控制面板",
+    RealLoading = USE_REAL,
+    Tasks = USE_REAL and buildTasks() or nil,
+})
+```
+
+### 常见预热任务
+
+| 任务 | 作用 |
+|---|---|
+| 扫描场景容器 | 缓存 `Workspace.Characters` 等，避免首次透视遍历整棵树 |
+| 预热高亮池 | 预建 `Highlight` 实例，首次透视直接复用 |
+| 预热音频池 | 预建 `Sound` 实例，避免每次播放都 `Instance.new` |
+| 缓存运行环境 | 预读 `CurrentCamera` / `LocalPlayer.Character` |
+| 预热雷达点 | 预建雷达小点 Frame |
+| 整理内存 | `collectgarbage("step")` 减少运行时卡顿 |
 
 ---
 
@@ -988,6 +1080,7 @@ end
 
 | 版本 | 变更 |
 |---|---|
+| 2.3.0 | 加载动画支持真实任务（RealLoading + Tasks）|
 | 2.2.1 | WaitForIntro 分两阶段等待（先等开始再等结束）|
 | 2.2.0 | Tab 悬停高亮接入刷新系统；导出入场状态 API |
 | 2.1.2 | 导出 UI.PlayClick（自定义控件可复用音效）|
