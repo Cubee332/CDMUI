@@ -3,7 +3,7 @@
 Roblox 控制面板 UI 库。单文件，无依赖，PC / 手机自适应。
 
 ```
-CDMUI 2.1.1
+CDMUI 2.1.2
 ```
 
 ---
@@ -988,6 +988,7 @@ end
 
 | 版本 | 变更 |
 |---|---|
+| 2.1.2 | 导出 UI.PlayClick（自定义控件可复用音效）|
 | 2.1.1 | Custom 注册切页恢复器；动画参数对齐 Expand |
 | 2.1.0 | 新增依赖系统 / 配置存储 / Tooltip（对齐主流 UI 库）|
 | 2.0.0 | 完善预设体系：清理重复定义，新增 Custom/Paragraph/Space/Card，导出 Layout |
