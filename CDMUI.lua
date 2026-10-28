@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.6.4  修复惯性滚动：全局 InputBegan、关闭原生滚动、滚轮立即响应
+-- CDMUI v1.6.5  修复鼠标拖动（input.Position 为 (0,0) 时用 GetMouseLocation 兜底）；Body2D 只剩箭头可点
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.6.4"
+UI.Version = "1.6.5"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -852,8 +852,15 @@ local function attachInertia(frame, opts)
     end
 
     local function posOf(input)
+        -- 优先用事件里的位置
         local ok, v = pcall(function() return input.Position end)
-        if ok and typeof(v) == "Vector2" then return v end
+        if ok and typeof(v) == "Vector2" then
+            -- 部分环境下 Position 可能是 (0,0)，用鼠标位置兜底
+            if v.X ~= 0 or v.Y ~= 0 then return v end
+        end
+        -- 兜底：直接问鼠标位置
+        local ok2, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+        if ok2 and typeof(loc) == "Vector2" then return loc end
         return nil
     end
 
@@ -864,18 +871,33 @@ local function attachInertia(frame, opts)
            and pos.Y >= ap.Y and pos.Y <= ap.Y + asz.Y
     end
 
-    -- 按下：用全局 InputBegan（ScrollingFrame 会吞掉自己的 InputBegan）
-    local beganConn = UserInputService.InputBegan:Connect(function(input, processed)
+    -- 判断输入的目标是不是 frame 自己或它的子孙
+    local function isTargetInside(input)
+        local ok, target = pcall(function() return input.Target end)
+        if not ok or not target then return false end
+        local node = target
+        local guard = 0
+        while node and guard < 30 do
+            if node == frame then return true end
+            node = node.Parent
+            guard = guard + 1
+        end
+        return false
+    end
+
+    -- 按下：全局监听，命中条件 = 坐标在范围内 或 目标是 frame 的子孙
+    UserInputService.InputBegan:Connect(function(input, processed)
         local ut = input.UserInputType
         if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then
             return
         end
         local pos = posOf(input)
-        if not pos or not insideFrame(pos) then return end
+        local hit = (pos and insideFrame(pos)) or isTargetInside(input)
+        if not hit then return end
 
         stopInertia()
         dragging = true
-        startPos = pos
+        startPos = pos or Vector2.new(0, 0)
         startCanvas = canvasOf()
         moved = 0
         velocity = 0
@@ -889,6 +911,11 @@ local function attachInertia(frame, opts)
             return
         end
         local pos = posOf(input)
+        if not pos then
+            -- 拿不到事件位置时用鼠标位置
+            local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+            if ok and typeof(loc) == "Vector2" then pos = loc end
+        end
         if not pos then return end
 
         local d = isX and (pos.X - startPos.X) or (pos.Y - startPos.Y)
@@ -1859,29 +1886,34 @@ local function makeFoldable(tab, opts)
 end
 -- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
 local function bindShieldClose(self)
-    -- 遮罩铺满全屏，点击面板内部时也会先命中它。
-    -- 所以必须【先判断是否真的点在面板外】，确认要关闭了才播音效，
-    -- 否则点行内任何位置都会先响一声（用户感知为「点哪都响」）。
-    self.Shield.MouseButton1Click:Connect(function()
-        -- 加载动画期间不许关
-        if self.Busy then return end
+    -- Shield 已设 Active=false，不再接收点击。
+    -- 改用全局 InputBegan 判断：点在面板外就关闭。
+    local conn = UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then
+            return
+        end
+        if not self.Visible or self.Busy then return end
 
-        local mp = UserInputService:GetMouseLocation()
+        local pos
+        local ok = pcall(function() pos = input.Position end)
+        if not ok or typeof(pos) ~= "Vector2" then return end
+
         local ap = self.Panel.AbsolutePosition
         local asz = self.Panel.AbsoluteSize
-        if mp.X >= ap.X and mp.X <= ap.X + asz.X
-            and mp.Y >= ap.Y and mp.Y <= ap.Y + asz.Y then
-            -- 点在面板内部：交给面板内的控件自己处理，这里什么都不做
+        -- 点在面板内：不处理
+        if pos.X >= ap.X and pos.X <= ap.X + asz.X
+            and pos.Y >= ap.Y and pos.Y <= ap.Y + asz.Y then
             return
         end
 
-        -- 确认点在面板外，才播关闭音效
+        -- 确认点在面板外，才播关闭音效并关闭
         playClick()
-
-        -- 标记：这次关闭来自点击边界外（由 SetVisible 内部消费）
         self._closedByShield = true
         self:SetVisible(false)
     end)
+    table.insert(self.Connections, conn)
 end
 -- 自清理：销毁上一次加载留下的所有实例（GUI + 顶栏按钮），避免重复加载时叠影子
 local function purgePrevious()
@@ -1974,7 +2006,10 @@ function UI.Create(opts)
         end
     end)
 
-    -- 点击遮罩：必须在面板之下（ZIndex 1 < 面板 2），且要判断点击是否真的在面板外
+    -- 点击遮罩：必须在面板之下（ZIndex 1 < 面板 2）
+    --   Active = false 很重要：它是全屏 TextButton，如果参与输入命中，
+    --   会挡住内容区的拖动（ScrollingFrame 收不到 InputBegan）。
+    --   关闭后改用全局 InputBegan 判断是否点在面板外。
     local shield = mk("TextButton", {
         Name = "Shield",
         Size = UDim2.new(1, 0, 1, 0),
@@ -1982,7 +2017,8 @@ function UI.Create(opts)
         Text = "",
         AutoButtonColor = false,
         ZIndex = 1,
-        Active = true,
+        Active = false,
+        Selectable = false,
     }, gui)
     self.Shield = shield
 
@@ -5530,21 +5566,8 @@ function Tab:Body2D(cfg)
     bindTap(arrowBtn, function()
         fold.toggle()
     end)
-    -- 整行点击也能切换（但不要在箭头重复触发）
-    -- 点击区域：从左边到箭头左侧，避免和箭头重复触发
-    local arrowW = LAYOUT.arrowSize
-    local rowHit = mk("TextButton", {
-        Name = "RowHit",
-        Size = UDim2.new(1, -(arrowW + 16), 0, 52),
-        Position = UDim2.new(0, 0, 0, 0),
-        BackgroundTransparency = 1,
-        Text = "",
-        ZIndex = 3,
-        Active = true,
-    }, row)
-    bindTap(rowHit, function()
-        fold.toggle()
-    end)
+    -- 只有右侧箭头可点，整行不响应点击
+    --   （之前有 rowHit 覆盖整行，导致点文字也会展开，容易误触）
 
     -- 初始状态：按 State 里的值恢复（默认收起）
     fold.setOpen(fold.isOpen(), false, 0)
