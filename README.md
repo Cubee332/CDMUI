@@ -1,10 +1,10 @@
 # CDMUI
 
-Roblox 控制面板 UI 库，单文件、零依赖，`loadstring` 就能直接用。
+Roblox 控制面板 UI 库。单文件，无依赖，支持 PC 和移动端。
 
-写了很久了，从最早只想要一个能开开关关的面板，到后来控件越加越多，索性整理成一个库。目前有 19 种控件，PC 和手机都能用。
+提供 19 种控件，覆盖开关、滑条、下拉、展开分组、人体图选择等常见需求。内置入场/退出动画、点击音效、鼠标锁定管理，以及重载时的自动清理。
 
-如果你只是想要一个能跑的界面，直接看下面的快速开始，五行代码就能出来。
+五行代码可以起一个能用的面板。
 
 ```lua
 local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
@@ -17,34 +17,70 @@ tab:Toggle({ Key = "k", Name = "开关", Callback = function(v) print(v) end })
 
 ---
 
-## 装进去
+## 目录
 
-三种方式，随便挑一种。
+- [安装](#安装)
+- [创建窗口](#创建窗口)
+- [Window 方法](#window-方法)
+- [控件参考](#控件参考)
+  - [Toggle 开关](#toggle-开关)
+  - [Slider 滑条](#slider-滑条)
+  - [Cycle 循环切换](#cycle-循环切换)
+  - [Input 数字输入](#input-数字输入)
+  - [Keybind 按键绑定](#keybind-按键绑定)
+  - [MultiSelect 多选](#multiselect-多选)
+  - [Expand 可展开分组](#expand-可展开分组)
+  - [Body2D 人体部位选择](#body2d-人体部位选择)
+  - [Dropdown 下拉](#dropdown-下拉)
+  - [ColorPicker 颜色](#colorpicker-颜色)
+  - [TextBox 文本框](#textbox-文本框)
+  - [Progress 进度条](#progress-进度条)
+  - [Section / Label / Divider](#sectionlabeldivider)
+  - [Buttons 按钮行](#buttons-按钮行)
+  - [ClickableRow / RowButton](#clickablerowrowbutton)
+- [控件对象](#控件对象)
+- [主题自定义](#主题自定义)
+- [动画与错误处理](#动画与错误处理)
+- [热重载](#热重载)
+- [注意事项](#注意事项)
+- [参数速查表](#参数速查表)
+- [常见问题](#常见问题)
+- [调试](#调试)
+- [销毁与清理](#销毁与清理)
+- [移动端适配](#移动端适配)
+- [版本历史](#版本历史)
+- [许可](#许可)
 
-**远程加载**，最省事：
+---
+
+## 安装
+
+提供三种加载方式。
+
+**远程加载**：
 
 ```lua
 local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Cubee332/CDMUI/main/CDMUI.lua"))()
 ```
 
-**本地文件**，把 `CDMUI.lua` 丢进执行器 workspace：
+**本地文件**，将 `CDMUI.lua` 放入执行器 workspace：
 
 ```lua
 local UI = loadstring(readfile("CDMUI.lua"))()
 ```
 
-**锁版本**，不想被上游更新影响行为的话，指定 commit：
+**锁定版本**，指定 commit 可避免上游更新带来的行为变化：
 
 ```lua
 local URL = "https://raw.githubusercontent.com/Cubee332/CDMUI/77fb1434/CDMUI.lua"
 local UI = loadstring(game:HttpGet(URL))()
 ```
 
-有个坑要提醒一下：`loadstring` 返回的是个函数，后面得加 `()` 调用才能拿到 UI 表。第一次用的时候卡了半天才发现。
+注意：`loadstring` 返回的是函数，需要加 `()` 调用才能得到 UI 表。
 
 ---
 
-## 创建一个窗口
+## 创建窗口
 
 ```lua
 local win = UI.Create({
@@ -69,7 +105,7 @@ local win = UI.Create({
 
 ---
 
-## 窗口能干什么
+## Window 方法
 
 ```lua
 win:Tab("基础")              -- 新建分页
@@ -81,7 +117,7 @@ win:Notify("搞定了", 3)      -- 弹个提示，3 秒
 win:Destroy()                -- 销毁
 ```
 
-状态的读写这块，之前设计走过弯路，现在定了这么一套：
+状态读写：
 
 ```lua
 win:Get("key")               -- 读
@@ -91,13 +127,13 @@ win:SetMany({ a = 1, b = 2 })-- 批量写
 win:RepaintAll()             -- 把 State 全量刷到界面
 ```
 
-`win.State` 是唯一的数据源，界面显示永远从它渲染。这样不会出现"逻辑改了界面没变"或者反过来的情况。
+`win.State` 是唯一数据源，控件显示始终从它渲染，避免逻辑状态与界面不一致。
 
-`Set` 和 `SetSilent` 的区别就一个：要不要触发回调。做功能互斥的时候用 `SetSilent`，避免 A 关 B、B 又去关 A 这种死循环。
+`Set` 会触发回调，`SetSilent` 不会。做功能互斥时用 `SetSilent`，可避免相互触发的死循环。
 
 ---
 
-## 控件
+## 控件参考
 
 所有控件都挂在 `tab` 上。通用的三个字段是 `Key`、`Name`、`Desc`，下面就不重复写了。
 
@@ -140,9 +176,9 @@ tab:Cycle({
 })
 ```
 
-回调第一个参数是索引数字，第二个才是文字。这一点很容易写错，我一开始就踩了——写成 `function(text)` 结果拿到的永远是数字。
+回调第一个参数是索引数字，第二个才是文字。写成 `function(text)` 会拿到数字。
 
-还有 `DefaultIndex` 必须写。写 `Default` 是没用的，界面永远显示第一项。
+默认值必须用 `DefaultIndex`，写 `Default` 无效，界面会始终显示第一项。
 
 ### Input 数字输入
 
@@ -156,7 +192,7 @@ tab:Input({
 })
 ```
 
-注意回调收到的是**字符串**，要数字自己 `tonumber`。
+回调收到的是**字符串**，需要数字时自行 `tonumber`。
 
 ### Keybind 按键绑定
 
@@ -185,7 +221,7 @@ tab:MultiSelect({
 
 ### Expand 可展开分组
 
-这个用得最多，一个主开关带一堆子选项：
+一个主开关带多个子选项：
 
 ```lua
 tab:Expand({
@@ -222,7 +258,7 @@ tab:Expand({
 })
 ```
 
-子项的 `Kind` 必须写，就这四种：`toggle`、`number`、`cycle`、`slider`。不写或者写错了，子项不会报错，但也不会显示——这个坑我踩过，排查了很久才发现是漏了 Kind。
+子项的 `Kind` 必须写，支持 `toggle`、`number`、`cycle`、`slider` 四种。漏写或写错不会报错，但子项不会显示。
 
 ### Body2D 人体部位选择
 
@@ -245,7 +281,7 @@ tab:Body2D({
 })
 ```
 
-默认是收起的，点标题行才展开。比例按 R6 来：头 60×60、躯干 90×90、四肢 45×90。
+默认收起，点击标题行展开。比例按 R6：头 60×60、躯干 90×90、四肢 45×90。
 
 ### Dropdown 下拉
 
@@ -288,7 +324,7 @@ local p = tab:Progress({ Name = "加载进度", Value = 0, Max = 100 })
 p.Set(50)   -- 更新到 50%
 ```
 
-### Section / Label / Divider
+### Section、Label、Divider
 
 三个纯展示的：
 
@@ -309,7 +345,7 @@ tab:Buttons({
 })
 ```
 
-### ClickableRow / RowButton
+### ClickableRow、RowButton
 
 整行可点，适合做"打开某某"的入口：
 
@@ -329,7 +365,7 @@ tab:RowButton({
 
 ---
 
-## 事后操作控件
+## 控件对象
 
 每个控件都会登记到 `tab.Rows[Key]`，可以后面再操作：
 
@@ -339,7 +375,7 @@ tab.Rows.esp.SetSilent(true)    -- 只改界面，不触发
 local v = tab.Rows.esp.Get()    -- 读值
 ```
 
-这个在做功能互斥时特别有用。比如 A 打开时要把 B 关掉：
+功能互斥示例，A 打开时关闭 B：
 
 ```lua
 tab:Toggle({
@@ -355,7 +391,7 @@ tab:Toggle({
 
 ---
 
-## 换主题
+## 主题自定义
 
 在 `UI.Create` 之前改这些：
 
@@ -376,9 +412,9 @@ UI.Size.radius   = 6
 
 ---
 
-## 动画和错误处理
+## 动画与错误处理
 
-动画接口开放了，可以自己做效果：
+动画接口：
 
 ```lua
 UI.Anim.to(inst, props, dur, style, dir, delay)   -- 补间
@@ -386,9 +422,9 @@ UI.Anim.cancel(inst)                               -- 取消该实例所有动�
 UI.Anim.snap(inst, props)                          -- 直接设到终态
 ```
 
-`Anim.to` 会自动取消同一实例同一属性上还在跑的旧动画，这个特性救过我很多次——之前做折叠功能，展开和收起的动画打架，导致"点了没反应"。
+`Anim.to` 会自动取消同一实例同一属性上未完成的旧动画，避免动画冲突。
 
-错误隔离也做了：
+错误隔离：
 
 ```lua
 UI.safeCall(fn, ...)     -- 安全调用，出错不中断 UI
@@ -396,17 +432,17 @@ UI.GetErrorStats()       -- 看错误统计
 UI.ClearErrors()         -- 清空
 ```
 
-所有控件的回调都走 `safeCall`，所以某个功能写崩了不会把整个面板搞死。
+所有控件回调都经过 `safeCall`，单个功能出错不会影响面板其余部分。
 
 ---
 
-## 重载
+## 热重载
 
-反复 `loadstring` 是安全的。会自动做这几件事：
+重复 `loadstring` 是安全的，会自动完成以下步骤：
 
-先播退出动画（面板和顶栏按钮一起淡出），等动画播完再建新的，最后断开所有连接、还原鼠标 hook。
+播放退出动画（面板与顶栏按钮淡出）→ 等待动画结束 → 创建新面板 → 断开所有连接并还原鼠标 hook。
 
-手动清理的话：
+手动清理：
 
 ```lua
 if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
@@ -414,9 +450,9 @@ if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
 
 ---
 
-## 踩过的坑
+## 注意事项
 
-这部分是重点。下面每一条都是我实际遇到过的问题，写新脚本的时候照着避就行。
+以下均为实际遇到过的问题，接入新脚本时请对照检查。
 
 **Cycle 的回调第一个参数是索引，不是文字。**
 
@@ -482,7 +518,7 @@ _G._CDMUIRunGen
 
 ---
 
-## 参数速查
+## 参数速查表
 
 所有控件都吃 `Key`、`Name`、`Desc` 这三个通用字段，下面只列专属的。
 
@@ -546,7 +582,7 @@ Key 是状态的唯一标识，改了就相当于新控件。发布之后最好�
 
 ---
 
-## 出问题怎么查
+## 调试
 
 **面板没出来**
 
@@ -588,7 +624,7 @@ end
 
 ---
 
-## 清理
+## 销毁与清理
 
 ```lua
 win:Destroy()                        -- 销毁当前窗口
@@ -604,7 +640,7 @@ if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
 
 ---
 
-## 手机端
+## 移动端适配
 
 自动检测（`TouchEnabled` 且没有 `KeyboardEnabled`），尺寸会放大一圈：
 
@@ -612,7 +648,7 @@ if _G._CDMUILastCleanup then _G._CDMUILastCleanup() end
 
 ---
 
-## 版本
+## 版本历史
 
 当前 1.6.0。这一版做了几件事：
 
