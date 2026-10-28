@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.8.4  新增屏幕 HUD（FPS/延迟/人数）；修复卸载鼠标未恢复
+-- CDMUI v1.8.5  HUD 弹性高度动画、可拖动与锁定、版式重做
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.8.4"
+UI.Version = "1.8.5"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -3874,56 +3874,345 @@ end
 
 -- ============================================================
 -- 屏幕信息 HUD（FPS / 延迟 / 服务器人数）
---   设计要点：
---     1. 独立的 ScreenGui，DisplayOrder 设很高，浮在最上层
---     2. 所有 GuiObject 都 Active=false / Selectable=false，
---        并且整个容器不拦截输入 —— 绝不会挡住游戏按键
---     3. 用真实采样算 FPS 和延迟，不读 NetworkPing
+--   特性：
+--     · 可拖动，可锁定位置（锁定时不吃输入，绝不会挡住游戏按键）
+--     · 增减行时高度带弹性动画，像果冻一样弹一下
+--     · 排版：左边标签固定宽度，右边数值右对齐，不会糊成一团
+--     · FPS / 延迟都用真实采样，不读 NetworkPing
 -- ============================================================
 UI.HUD = {}
 
 do
-    local hudGui = nil
-    local hudFrame = nil
-    local hudLabels = {}
+    local hudGui, hudFrame, hudInner, hudFloat, hudLockBtn
+    local hudRows = {}          -- key -> { root, label, value }
     local hudConn = nil
+    local hudTweens = {}
+    local hudDragConn = nil
 
     local showFPS, showPing, showPlayers = false, false, false
+    local hudLocked = true      -- 默认锁定：不接收拖动，也不会挡住游戏按键
+    local hudDragging = false
 
-    -- ===== FPS 采样 =====
-    local frameCount = 0
-    local fpsWindow = 0
-    local curFPS = 0
+    -- 布局常量（手机端整体放大）
+    local PAD_X   = IS_MOBILE and 16 or 13
+    local PAD_Y   = IS_MOBILE and 10 or 8
+    local ROW_H   = IS_MOBILE and 30 or 26
+    local ROW_GAP = IS_MOBILE and 6 or 5
+    local FONT_SZ = IS_MOBILE and 20 or 18
+    local LABEL_W = IS_MOBILE and 68 or 58
+    local VALUE_W = IS_MOBILE and 92 or 80
+    local LOCK_SZ = IS_MOBILE and 26 or 22
 
-    -- ===== 延迟采样（真实往返时间）=====
-    -- 做法：往一个 RemoteFunction 发一次空调用，量它返回的耗时。
-    --   这是真正的客户端→服务端→客户端往返时间，
-    --   比 UserInputService:GetNetworkPing 准得多
-    --   （那个只算下行包间隔，不含服务端处理）。
-    local pingSamples = {}
-    local curPing = 0
-    local pingTarget = nil
+    -- ===== 采样 =====
+    local frameCount, fpsWindow, curFPS = 0, 0, 0
+    local pingSamples, curPing = {}, 0
     local pingBusy = false
 
-    -- 延迟测量
-    --   优先用「自己发一个 RemoteEvent 并等它回环」量真实往返；
-    --   拿不到回环就退回 Roblox 自己的 Data Ping 统计（不是 GetNetworkPing，
-    --   那个是下行丢包间隔，跟实际延迟差很远）。
     local statsPingItem = nil
-    do
-        local ok, item = pcall(function()
-            return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]
+    pcall(function()
+        statsPingItem = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]
+    end)
+
+    -- ===== 动画工具 =====
+    local function killTween(key)
+        local t = hudTweens[key]
+        if t then pcall(function() t:Cancel() end); hudTweens[key] = nil end
+    end
+
+    -- Q 弹：用 Bounce 风格做高度过渡
+    local function animateHeight(targetH, instant)
+        if not hudFrame then return end
+        local goal = UDim2.fromOffset(hudFrame.Size.X.Offset, targetH)
+        if instant then
+            killTween("h")
+            hudFrame.Size = goal
+            return
+        end
+        killTween("h")
+        local info = TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        local tw = TweenService:Create(hudFrame, info, { Size = goal })
+        tw:Play()
+        hudTweens.h = tw
+    end
+
+    local function desiredHeight()
+        local n = 0
+        local rows = {}
+        if showFPS then table.insert(rows, "fps") end
+        if showPing then table.insert(rows, "ping") end
+        if showPlayers then table.insert(rows, "players") end
+        n = #rows
+        if n == 0 then return 0, rows end
+        local h = PAD_Y * 2 + n * ROW_H + (n - 1) * ROW_GAP
+        return h, rows
+    end
+
+    -- ===== 构建 UI =====
+    local function ensureHud()
+        if hudGui and hudGui.Parent then return end
+
+        local parent = guiParent()
+        hudGui = Instance.new("ScreenGui")
+        hudGui.Name = "CDMUI_HUD"
+        hudGui.ResetOnSpawn = false
+        hudGui.IgnoreGuiInset = true
+        hudGui.DisplayOrder = 9999
+        hudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        hudGui.Enabled = true
+        pcall(function() hudGui.Active = false end)
+        hudGui.Parent = parent
+
+        hudFrame = Instance.new("Frame")
+        hudFrame.Name = "HudBox"
+        hudFrame.AnchorPoint = Vector2.new(1, 0)
+        -- 初始位置往下挪，避开顶部信息栏
+        hudFrame.Position = UDim2.new(1, -14, 0, IS_MOBILE and 110 or 100)
+        hudFrame.Size = UDim2.fromOffset(PAD_X * 2 + LABEL_W + VALUE_W + LOCK_SZ + 8, 0)
+        hudFrame.BackgroundColor3 = Color3.fromRGB(16, 17, 21)
+        hudFrame.BackgroundTransparency = 0.18
+        hudFrame.BorderSizePixel = 0
+        hudFrame.Active = false
+        hudFrame.Selectable = false
+        hudFrame.ClipsDescendants = false
+        hudFrame.Parent = hudGui
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 8)
+        corner.Parent = hudFrame
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.fromRGB(70, 74, 86)
+        stroke.Thickness = 1
+        stroke.Transparency = 0.45
+        stroke.Parent = hudFrame
+
+        -- 锁定按钮（右上角）
+        hudLockBtn = Instance.new("TextButton")
+        hudLockBtn.Name = "LockBtn"
+        hudLockBtn.Size = UDim2.fromOffset(LOCK_SZ, LOCK_SZ)
+        hudLockBtn.AnchorPoint = Vector2.new(1, 0)
+        hudLockBtn.Position = UDim2.new(1, -6, 0, 5)
+        hudLockBtn.BackgroundColor3 = Color3.fromRGB(34, 36, 44)
+        hudLockBtn.BackgroundTransparency = 0.15
+        hudLockBtn.BorderSizePixel = 0
+        hudLockBtn.AutoButtonColor = false
+        hudLockBtn.Text = "LOCK"
+        hudLockBtn.Font = Enum.Font.GothamBold
+        hudLockBtn.TextSize = IS_MOBILE and 10 or 8
+        hudLockBtn.TextColor3 = Color3.fromRGB(150, 156, 170)
+        hudLockBtn.Active = true
+        hudLockBtn.Selectable = false
+        hudLockBtn.Parent = hudFrame
+
+        local lc = Instance.new("UICorner")
+        lc.CornerRadius = UDim.new(0, 5)
+        lc.Parent = hudLockBtn
+
+        -- 点击切换锁定
+        local lockTouched = false
+        hudLockBtn.InputBegan:Connect(function(input)
+            local ut = input.UserInputType
+            if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
+                lockTouched = true
+            end
         end)
-        if ok then statsPingItem = item end
+        hudLockBtn.InputEnded:Connect(function(input)
+            local ut = input.UserInputType
+            if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
+                if lockTouched then
+                    lockTouched = false
+                    setLocked(not hudLocked)
+                end
+            end
+        end)
+
+        -- 行容器：固定从左上开始，靠 UIListLayout 排
+        hudInner = Instance.new("Frame")
+        hudInner.Name = "Rows"
+        hudInner.Size = UDim2.new(1, -(LOCK_SZ + 12), 1, 0)
+        hudInner.Position = UDim2.fromOffset(PAD_X, PAD_Y)
+        hudInner.BackgroundTransparency = 1
+        hudInner.Active = false
+        hudInner.Selectable = false
+        hudInner.Parent = hudFrame
+
+        local layout = Instance.new("UIListLayout")
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.Padding = UDim.new(0, ROW_GAP)
+        layout.Parent = hudInner
+
+        -- 每行的构造
+        local function makeRow(key, order, labelText)
+            local root = Instance.new("Frame")
+            root.Name = key .. "Row"
+            root.LayoutOrder = order
+            root.Size = UDim2.new(1, 0, 0, ROW_H)
+            root.BackgroundTransparency = 1
+            root.Active = false
+            root.Selectable = false
+            root.Visible = false
+            root.Parent = hudInner
+
+            local label = Instance.new("TextLabel")
+            label.Name = "Label"
+            label.Size = UDim2.fromOffset(LABEL_W, ROW_H)
+            label.Position = UDim2.fromOffset(0, 0)
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.GothamMedium
+            label.TextSize = FONT_SZ
+            label.TextColor3 = Color3.fromRGB(140, 146, 160)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.TextYAlignment = Enum.TextYAlignment.Center
+            label.Text = labelText
+            label.Active = false
+            label.Selectable = false
+            label.Parent = root
+
+            local value = Instance.new("TextLabel")
+            value.Name = "Value"
+            value.Size = UDim2.fromOffset(VALUE_W, ROW_H)
+            value.Position = UDim2.fromOffset(LABEL_W, 0)
+            value.BackgroundTransparency = 1
+            value.Font = Enum.Font.GothamBold
+            value.TextSize = FONT_SZ
+            value.TextColor3 = Color3.fromRGB(240, 244, 252)
+            value.TextXAlignment = Enum.TextXAlignment.Right
+            value.TextYAlignment = Enum.TextYAlignment.Center
+            value.Text = "--"
+            value.Active = false
+            value.Selectable = false
+            value.Parent = root
+
+            return { root = root, label = label, value = value }
+        end
+
+        hudRows.fps = makeRow("fps", 1, "FPS")
+        hudRows.ping = makeRow("ping", 2, "延迟")
+        hudRows.players = makeRow("players", 3, "人数")
     end
 
-    local function readStatsPing()
-        if not statsPingItem then return nil end
-        local ok, v = pcall(function() return statsPingItem:GetValue() end)
-        if ok and type(v) == "number" and v > 0 then return v end
-        return nil
+    -- ===== 拖动 / 锁定 =====
+    local function setLocked(on)
+        hudLocked = on and true or false
+        if hudLockBtn then
+            hudLockBtn.Text = hudLocked and "LOCK" or "FREE"
+            hudLockBtn.TextColor3 = hudLocked
+                and Color3.fromRGB(255, 150, 90)
+                or Color3.fromRGB(150, 156, 170)
+            hudLockBtn.BackgroundColor3 = hudLocked
+                and Color3.fromRGB(52, 36, 26)
+                or Color3.fromRGB(34, 36, 44)
+        end
+        -- 锁定时整块不接收输入，绝对不会挡住游戏按键
+        if hudFrame then
+            hudFrame.Active = not hudLocked
+        end
+        if hudLockBtn then
+            -- 锁定按钮本身永远可以点，否则解不开
+            hudLockBtn.Visible = true
+        end
     end
 
+    local function bindDrag()
+        if hudDragConn then return end
+        local startPos, startMouse = nil, nil
+
+        hudFrame.InputBegan:Connect(function(input)
+            if hudLocked then return end
+            local ut = input.UserInputType
+            if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
+                hudDragging = true
+                startPos = hudFrame.Position
+                local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+                startMouse = (ok and typeof(loc) == "Vector2") and loc or Vector2.new(0, 0)
+                -- 拖动期间让整块吃输入，避免拖到游戏按钮上
+                hudFrame.Active = true
+            end
+        end)
+
+        hudDragConn = addDragListener(function(input)
+            local ut = input.UserInputType
+            if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.Touch then
+                if input.UserInputState == Enum.UserInputState.End then
+                    hudDragging = false
+                    if hudFrame then hudFrame.Active = not hudLocked end
+                    return
+                end
+            end
+            if not hudDragging or hudLocked then return end
+            if ut ~= Enum.UserInputType.MouseMovement and ut ~= Enum.UserInputType.Touch then return end
+            local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+            if not ok or typeof(loc) ~= "Vector2" then return end
+            local insetY = 0
+            pcall(function()
+                local ins = game:GetService("GuiService"):GetGuiInset()
+                if typeof(ins) == "Vector2" then insetY = ins.Y end
+            end)
+            local dx = loc.X - startMouse.X
+            local dy = (loc.Y - insetY) - (startMouse.Y - insetY)
+            if startPos then
+                hudFrame.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + math.floor(dx),
+                    startPos.Y.Scale, startPos.Y.Offset + math.floor(dy))
+            end
+        end)
+    end
+
+    local function destroyHud()
+        if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
+        if hudDragConn then pcall(hudDragConn); hudDragConn = nil end
+        killTween("h")
+        hudRows = {}
+        if hudGui and hudGui.Parent then pcall(function() hudGui:Destroy() end) end
+        hudGui, hudFrame, hudInner, hudFloat, hudLockBtn = nil, nil, nil, nil, nil
+    end
+
+    -- ===== 刷新文字 + 行可见性 + 高度动画 =====
+    local function refreshLayout(instant)
+        if not hudFrame or not hudFrame.Parent then return end
+        local h, rows = desiredHeight()
+        local anyOn = #rows > 0
+        hudFrame.Visible = anyOn
+        if not anyOn then return end
+
+        -- 行显隐（按顺序）
+        local order = 0
+        for _, key in ipairs(rows) do
+            order = order + 1
+            local r = hudRows[key]
+            if r then
+                r.root.Visible = true
+                r.root.LayoutOrder = order
+            end
+        end
+        for key, r in pairs(hudRows) do
+            local keep = false
+            for _, k in ipairs(rows) do if k == key then keep = true break end end
+            if not keep then r.root.Visible = false end
+        end
+
+        animateHeight(h, instant)
+    end
+
+    local function updateText()
+        if not hudFrame or not hudFrame.Parent then return end
+        if showFPS and hudRows.fps then
+            hudRows.fps.value.Text = string.format("%d", math.floor(curFPS + 0.5))
+        end
+        if showPing and hudRows.ping then
+            if curPing > 0 then
+                hudRows.ping.value.Text = string.format("%d ms", math.floor(curPing + 0.5))
+            else
+                hudRows.ping.value.Text = "-- ms"
+            end
+        end
+        if showPlayers and hudRows.players then
+            hudRows.players.value.Text = string.format("%d / %d",
+                #game:GetService("Players"):GetPlayers(), 20)
+        end
+    end
+
+    -- ===== 采样 =====
     local function updatePingFromSamples()
         local s = {}
         for i, v in ipairs(pingSamples) do s[i] = v end
@@ -3936,140 +4225,25 @@ do
     end
 
     local function doPing()
-        if pingBusy then return end
+        if pingBusy or not statsPingItem then return end
         pingBusy = true
-
-        -- 用 Roblox 的网络统计作为主数据源：平滑、稳定、不会误触发游戏逻辑
-        local v = readStatsPing()
+        local ok, v = pcall(function() return statsPingItem:GetValue() end)
         pingBusy = false
-        if v then
+        if ok and type(v) == "number" and v > 0 then
             table.insert(pingSamples, v)
-            -- 只留最近 4 个样本：太少会跳，太多反应慢
             if #pingSamples > 4 then table.remove(pingSamples, 1) end
             updatePingFromSamples()
         end
     end
 
-    local function ensureHud()
-        if hudGui and hudGui.Parent then return end
-
-        local parent = guiParent()
-        hudGui = Instance.new("ScreenGui")
-        hudGui.Name = "CDMUI_HUD"
-        hudGui.ResetOnSpawn = false
-        hudGui.IgnoreGuiInset = true
-        hudGui.DisplayOrder = 9999          -- 浮在最上面
-        hudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-        hudGui.Enabled = true
-        -- 整个 ScreenGui 不接收任何输入
-        pcall(function() hudGui.Active = false end)
-        hudGui.Parent = parent
-
-        hudFrame = Instance.new("Frame")
-        hudFrame.Name = "HudBox"
-        hudFrame.AnchorPoint = Vector2.new(1, 0)
-        hudFrame.Position = UDim2.new(1, -12, 0, 12)   -- 右上角
-        -- 字号和宽高都按需要放大：手机端屏幕小，14px 根本看不清
-        local labelSize = IS_MOBILE and 22 or 19
-        local boxWidth = IS_MOBILE and 200 or 176
-
-        hudFrame.Size = UDim2.fromOffset(boxWidth, 0)
-        hudFrame.AutomaticSize = Enum.AutomaticSize.Y
-        hudFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-        hudFrame.BackgroundTransparency = 0.25
-        hudFrame.BorderSizePixel = 0
-        hudFrame.Active = false
-        hudFrame.Selectable = false
-        hudFrame.Parent = hudGui
-
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = hudFrame
-
-        local pad = Instance.new("UIPadding")
-        pad.PaddingTop = UDim.new(0, 8)
-        pad.PaddingBottom = UDim.new(0, 8)
-        pad.PaddingLeft = UDim.new(0, 12)
-        pad.PaddingRight = UDim.new(0, 12)
-        pad.Parent = hudFrame
-
-        local layout = Instance.new("UIListLayout")
-        layout.SortOrder = Enum.SortOrder.LayoutOrder
-        layout.Padding = UDim.new(0, 4)
-        layout.Parent = hudFrame
-
-        local function makeLabel(name, order)
-            local l = Instance.new("TextLabel")
-            l.Name = name
-            l.LayoutOrder = order
-            l.Size = UDim2.new(1, 0, 0, labelSize + 6)
-            l.BackgroundTransparency = 1
-            l.Font = Enum.Font.Code
-            l.TextSize = labelSize
-            l.TextColor3 = Color3.fromRGB(235, 240, 250)
-            l.TextXAlignment = Enum.TextXAlignment.Left
-            l.Active = false
-            l.Selectable = false
-            l.Text = ""
-            l.Parent = hudFrame
-            return l
-        end
-
-        hudLabels.fps = makeLabel("FPS", 1)
-        hudLabels.ping = makeLabel("Ping", 2)
-        hudLabels.players = makeLabel("Players", 3)
-
-        hudLabels.fps.Visible = showFPS
-        hudLabels.ping.Visible = showPing
-        hudLabels.players.Visible = showPlayers
-        hudFrame.Visible = showFPS or showPing or showPlayers
-    end
-
-    local function destroyHud()
-        if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
-        if hudGui and hudGui.Parent then pcall(function() hudGui:Destroy() end) end
-        hudGui = nil; hudFrame = nil; hudLabels = {}
-    end
-
-    local function updateHud()
-        if not hudFrame or not hudFrame.Parent then return end
-
-        local anyOn = showFPS or showPing or showPlayers
-        hudFrame.Visible = anyOn
-        if not anyOn then return end
-
-        if showFPS then
-            hudLabels.fps.Visible = true
-            hudLabels.fps.Text = string.format("FPS    %d", math.floor(curFPS + 0.5))
-        else
-            hudLabels.fps.Visible = false
-        end
-
-        if showPing then
-            hudLabels.ping.Visible = true
-            if curPing > 0 then
-                hudLabels.ping.Text = string.format("延迟   %d ms", math.floor(curPing + 0.5))
-            else
-                hudLabels.ping.Text = "延迟   -- ms"
-            end
-        else
-            hudLabels.ping.Visible = false
-        end
-
-        if showPlayers then
-            hudLabels.players.Visible = true
-            local n = #game:GetService("Players"):GetPlayers()
-            hudLabels.players.Text = string.format("人数   %d / 20", n)
-        else
-            hudLabels.players.Visible = false
-        end
-    end
-
-    local function startHudLoop()
+    local function startLoop()
         if hudConn then return end
         ensureHud()
-        local acc = 0
-        local pingAcc = 0
+        bindDrag()
+        setLocked(hudLocked)
+        refreshLayout(true)
+
+        local acc, pingAcc = 0, 0
         hudConn = RunService.RenderStepped:Connect(function(dt)
             frameCount = frameCount + 1
             fpsWindow = fpsWindow + dt
@@ -4078,55 +4252,70 @@ do
 
             if fpsWindow >= 0.3 then
                 curFPS = frameCount / fpsWindow
-                frameCount = 0
-                fpsWindow = 0
+                frameCount, fpsWindow = 0, 0
             end
-            -- 延迟：每 0.5 秒采一次，中位数只留 4 个样本
-            --   这样数值变化跟游戏自带的 Data Ping 差不多快
             if pingAcc >= 0.5 then
                 pingAcc = 0
                 task.spawn(doPing)
             end
-            -- 每 0.25 秒刷新文字
             if acc >= 0.15 then
                 acc = 0
-                updateHud()
+                updateText()
             end
         end)
     end
 
-    local function stopHudLoop()
+    local function stopLoop()
         if hudConn then pcall(function() hudConn:Disconnect() end); hudConn = nil end
-        if not (showFPS or showPing or showPlayers) then destroyHud() end
     end
 
+    -- ===== 对外接口 =====
     function UI.SetHUD(kind, on)
-        if kind == "fps" then showFPS = on and true or false
-        elseif kind == "ping" then showPing = on and true or false
-        elseif kind == "players" then showPlayers = on and true or false
+        local changed = false
+        if kind == "fps" then
+            if showFPS ~= (on and true or false) then changed = true end
+            showFPS = on and true or false
+        elseif kind == "ping" then
+            if showPing ~= (on and true or false) then changed = true end
+            showPing = on and true or false
+        elseif kind == "players" then
+            if showPlayers ~= (on and true or false) then changed = true end
+            showPlayers = on and true or false
         else return end
 
         if showFPS or showPing or showPlayers then
-            startHudLoop()
-            updateHud()
+            if not hudGui or not hudGui.Parent then
+                startLoop()          -- 首次开启，直接建好并瞬移到正确高度
+            elseif changed then
+                refreshLayout(false) -- 增减行：走弹性动画
+                updateText()
+            end
         else
-            stopHudLoop()
+            stopLoop()
+            destroyHud()
         end
+    end
+
+    function UI.SetHUDLocked(on)
+        if not hudFrame then
+            hudLocked = on and true or false
+            return
+        end
+        setLocked(on)
     end
 
     function UI.DestroyHUD()
         showFPS, showPing, showPlayers = false, false, false
-        stopHudLoop()
+        stopLoop()
         destroyHud()
     end
 
-    -- 换角色 / 重生后 ScreenGui 可能被清，这里自动重建
     if lp then
         lp.CharacterAdded:Connect(function()
             task.wait(1)
             if showFPS or showPing or showPlayers then
                 hudGui = nil
-                startHudLoop()
+                startLoop()
             end
         end)
     end
