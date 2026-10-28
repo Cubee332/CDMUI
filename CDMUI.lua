@@ -231,7 +231,7 @@
         退出动画 0.28s（PC 0.24s）。
 
 --]]
--- CDMUI v1.6.2  修复点击音效双响（ClickableRow 双通道触发 + 5 处重复 playClick）
+-- CDMUI v1.6.3  加入惯性滚动（按拖动力度决定滑行距离）；平台判定与拖动修复
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -244,7 +244,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "1.6.2"
+UI.Version = "1.6.3"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -509,9 +509,48 @@ local FONT_BOLD   = Enum.Font.GothamBold
 local FONT_BLACK  = Enum.Font.GothamBlack
 
 -- 平台判定
--- 有触摸且没键盘算移动端
+--   IS_TOUCH  : 设备是否支持触摸（平板/手机/带触屏的电脑都算）
+--   IS_MOBILE : 是否按手机布局渲染
+--
+-- 判断顺序：
+--   1) 显式覆盖：UI.ForceMobile = true / false（调试或强制切换用）
+--   2) 有触摸 + 没键盘 → 手机
+--   3) 有触摸 + 有键盘 + 屏幕很小 → 也按手机（部分平板外接键盘）
+--   4) 否则 → PC
 local IS_TOUCH = UserInputService.TouchEnabled
-local IS_MOBILE = IS_TOUCH and not UserInputService.KeyboardEnabled
+
+local function detectMobile()
+    local forced = rawget(_G, "_CDMUIMobileOverride")
+    if forced ~= nil then return forced and true or false end
+
+    if not IS_TOUCH then return false end
+    if not UserInputService.KeyboardEnabled then return true end
+
+    -- 有触摸也有键盘：看屏幕尺寸
+    local cam = workspace.CurrentCamera
+    local vs = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    if math.min(vs.X, vs.Y) <= 700 then return true end
+
+    return false
+end
+
+local IS_MOBILE = detectMobile()
+
+-- 平台判定结果（只读）
+UI.IsMobile = IS_MOBILE
+UI.IsTouch = IS_TOUCH
+
+-- 强制切换布局（下次加载生效）
+--   UI.ForceMobile(true)  强制手机布局
+--   UI.ForceMobile(false) 强制 PC 布局
+--   UI.ForceMobile(nil)   恢复自动判断
+function UI.ForceMobile(on)
+    if on == nil then
+        _G._CDMUIMobileOverride = nil
+    else
+        _G._CDMUIMobileOverride = on and true or false
+    end
+end
 
 -- 移动端：面板更宽更矮、行更高（手指点得准）、Tab 平分整行、字号加大
 local LAYOUT = {
@@ -705,6 +744,238 @@ local function bindTap(btn, fn)
 
 end
 
+-- ============================================================
+-- 惯性滚动
+--   给 ScrollingFrame 加上「拖动 + 松手后继续滑行」的手感
+--   参数：
+--     frame      目标 ScrollingFrame
+--     axis       "Y"（竖向，默认）或 "X"（横向，Tab 栏用）
+--     onTap      位移不足阈值时判定为点击（可选）
+--   返回 { Destroy() }
+-- ============================================================
+local function attachInertia(frame, opts)
+    if not frame then return { Destroy = function() end } end
+    opts = opts or {}
+    local axis = opts.axis or "Y"
+    local isX = (axis == "X")
+
+    local DRAG_TH   = IS_MOBILE and 6 or 4        -- 超过多少像素才算拖动
+    local MIN_SPEED = 0.12                        -- 低于这个速度就停
+    local SAMPLE_WINDOW = 0.08                    -- 用最近多少秒的位移估算速度
+
+    -- 力度映射：拖动速度越快 -> 初速度越大、摩擦越小（滑得越远）
+    --   这样「轻推」和「用力甩」的手感明显不同
+    local function applyForce(rawSpeed)
+        local s = math.abs(rawSpeed)
+        if s < 0.6 then
+            -- 轻推：几乎立刻停
+            return rawSpeed * 0.55, 0.80
+        elseif s < 2.5 then
+            -- 中等：正常滑一段
+            local k = (s - 0.6) / 1.9          -- 0..1
+            return rawSpeed * (0.75 + k * 0.35), 0.88 + k * 0.04
+        else
+            -- 用力甩：滑得远
+            local k = math.min(1, (s - 2.5) / 4)  -- 0..1
+            return math.min(rawSpeed * 1.15, 70), 0.94 + k * 0.025
+        end
+    end
+
+    local dragging = false
+    local startPos = nil
+    local startCanvas = 0
+    local moved = 0
+    local velocity = 0
+    local samples = {}       -- { {t = os.clock(), v = canvasPos}, ... }
+    local conn = nil
+    local destroyed = false
+    local forceFriction = 0.92     -- 本次滑行的摩擦（由力度决定）
+
+    local function canvasOf()
+        return isX and frame.CanvasPosition.X or frame.CanvasPosition.Y
+    end
+    local function setCanvas(v)
+        local maxV = isX
+            and math.max(0, frame.AbsoluteCanvasSize.X - frame.AbsoluteSize.X)
+            or  math.max(0, frame.AbsoluteCanvasSize.Y - frame.AbsoluteSize.Y)
+        v = math.clamp(v, 0, maxV)
+        if isX then
+            frame.CanvasPosition = Vector2.new(v, frame.CanvasPosition.Y)
+        else
+            frame.CanvasPosition = Vector2.new(frame.CanvasPosition.X, v)
+        end
+        return v
+    end
+
+    local function stopInertia()
+        if conn then
+            pcall(function() conn:Disconnect() end)
+            conn = nil
+        end
+        velocity = 0
+    end
+
+    local function startInertia()
+        if math.abs(velocity) < MIN_SPEED then return end
+
+        -- 先取出速度，再调 stopInertia（它会把 velocity 清零）
+        local v = velocity
+        local fr = forceFriction or 0.92
+        stopInertia()
+
+        local tickCount = 0
+        conn = RunService.RenderStepped:Connect(function()
+            if destroyed or not frame or not frame.Parent then
+                stopInertia()
+                return
+            end
+
+            v = v * fr
+            if math.abs(v) < MIN_SPEED then
+                stopInertia()
+                return
+            end
+
+            local cur = canvasOf()
+            local nxt = setCanvas(cur + v)
+            if math.abs(nxt - cur) < 0.5 then
+                stopInertia()
+            end
+        end)
+    end
+
+    local function posOf(input)
+        local ok, v = pcall(function() return input.Position end)
+        if ok and typeof(v) == "Vector2" then return v end
+        return nil
+    end
+
+    frame.InputBegan:Connect(function(input)
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then
+            return
+        end
+        stopInertia()
+        local pos = posOf(input)
+        if not pos then return end
+
+        dragging = true
+        startPos = pos
+        startCanvas = canvasOf()
+        moved = 0
+        velocity = 0
+        samples = { { t = os.clock(), p = startCanvas } }
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging or not startPos then return end
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseMovement and ut ~= Enum.UserInputType.Touch then
+            return
+        end
+        local pos = posOf(input)
+        if not pos then return end
+
+        local d = isX and (pos.X - startPos.X) or (pos.Y - startPos.Y)
+        local absd = math.abs(d)
+        if absd > moved then moved = absd end
+        if moved < DRAG_TH then return end
+
+        local target = startCanvas - d
+        setCanvas(target)
+
+        -- 采样用于估算速度
+        local now = os.clock()
+        local lastSample = samples[#samples]
+        -- 同一帧内的多次移动不重复采样（os.clock 精度有限）
+        if not lastSample or (now - lastSample.t) >= 0.008 then
+            table.insert(samples, { t = now, p = canvasOf() })
+            while #samples > 2 and (now - samples[1].t) > SAMPLE_WINDOW do
+                table.remove(samples, 1)
+            end
+        else
+            -- 更新最后一个采样的位置，但不更新时间
+            lastSample.p = canvasOf()
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then
+            return
+        end
+        if not dragging then return end
+        dragging = false
+
+        -- 用最近采样估算速度（像素/帧）
+        if #samples >= 2 then
+            local first, last = samples[1], samples[#samples]
+            local dt = last.t - first.t
+            local dp = last.p - first.p
+            if dt >= 0.008 then
+                local raw = (dp / dt) / 60
+                velocity, forceFriction = applyForce(raw)
+            elseif math.abs(dp) > 4 then
+                velocity, forceFriction = applyForce(dp * 0.35)
+            end
+        end
+
+        -- 位移不足：视为点击，不滑行
+        if moved < DRAG_TH then
+            velocity = 0
+            if opts.onTap then UI.safeCall(opts.onTap, input) end
+        end
+
+        samples = {}
+        startPos = nil
+
+        if math.abs(velocity) >= MIN_SPEED then
+            startInertia()
+        end
+    end)
+
+    -- 滚轮：不直接跳转，而是注入一个初速度让它滑过去（和拖动同样的惯性手感）
+    local WHEEL_SPEED = 14          -- 每格滚轮注入的初速度（像素/帧）
+    local lastWheel = 0
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+
+        local now = os.clock()
+        local dz = input.Position.Z
+        if dz == 0 then return end
+
+        -- 连续滚轮时叠加加速，手感更跟手
+        if now - lastWheel < 0.15 then
+            velocity = velocity - dz * WHEEL_SPEED * 0.5
+        else
+            velocity = -dz * WHEEL_SPEED
+        end
+        forceFriction = 0.93        -- 滚轮滑得稍远一点
+        lastWheel = now
+
+        -- 撞边界直接清零，避免一直顶着墙滑
+        local cur = canvasOf()
+        local maxV = isX
+            and math.max(0, frame.AbsoluteCanvasSize.X - frame.AbsoluteSize.X)
+            or  math.max(0, frame.AbsoluteCanvasSize.Y - frame.AbsoluteSize.Y)
+        if (cur <= 0 and velocity < 0) or (cur >= maxV and velocity > 0) then
+            velocity = 0
+            return
+        end
+
+        startInertia()
+    end)
+
+    return {
+        Destroy = function()
+            destroyed = true
+            stopInertia()
+        end,
+        Stop = stopInertia,
+        IsDragging = function() return dragging end,
+    }
+end
+
 local function adaptiveScale()
     local cam = workspace.CurrentCamera
     local vs = cam and cam.ViewportSize or Vector2.new(800, 600)
@@ -845,26 +1116,52 @@ function UI.ApplyTouchTweaks(gui)
         list.Active = true
     end
 
+    -- 拖动面板：标题栏按住可拖，鼠标和触摸都支持
     local title = panel and panel:FindFirstChild("BigTitle")
     if title then
         local dragging, dragStart, startPos = false, nil, nil
+        local DRAG_TH = IS_MOBILE and 8 or 12
+        local moved = 0
+
         title.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch then
+            local ut = input.UserInputType
+            if ut == Enum.UserInputType.Touch or ut == Enum.UserInputType.MouseButton1 then
                 dragging = true
                 dragStart = input.Position
                 startPos = panel.Position
+                moved = 0
             end
         end)
+
         UserInputService.InputChanged:Connect(function(input)
-            if dragging and input.UserInputType == Enum.UserInputType.Touch then
-                local delta = input.Position - dragStart
-                panel.Position = UDim2.new(0.5, startPos.X.Offset + delta.X,
-                                           0.5, startPos.Y.Offset + delta.Y)
-            end
+            if not dragging or not dragStart then return end
+            local ut = input.UserInputType
+            if ut ~= Enum.UserInputType.Touch and ut ~= Enum.UserInputType.MouseMovement then return end
+
+            local delta = input.Position - dragStart
+            local dist = math.sqrt(delta.X * delta.X + delta.Y * delta.Y)
+            if dist > moved then moved = dist end
+            if moved < DRAG_TH then return end
+
+            -- 限制在屏幕内，避免拖出可视区域找不回来
+            local cam = workspace.CurrentCamera
+            local vs = cam and cam.ViewportSize or Vector2.new(1280, 720)
+            local pw, ph = panel.AbsoluteSize.X, panel.AbsoluteSize.Y
+            local maxX = math.max(0, (vs.X - pw) / 2)
+            local maxY = math.max(0, (vs.Y - ph) / 2)
+
+            local nx = math.clamp(startPos.X.Offset + delta.X, -maxX, maxX)
+            local ny = math.clamp(startPos.Y.Offset + delta.Y, -maxY, maxY)
+
+            panel.Position = UDim2.new(0.5, nx, 0.5, ny)
         end)
+
         UserInputService.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch then
+            local ut = input.UserInputType
+            if ut == Enum.UserInputType.Touch or ut == Enum.UserInputType.MouseButton1 then
                 dragging = false
+                dragStart = nil
+                moved = 0
             end
         end)
     end
@@ -876,10 +1173,14 @@ end
 
 -- 勾选框（原版方块样式 + 弹动动画）
 local function makeCheckbox(parent, size, rightOffset, onChange)
+    -- 点击热区：
+    --   手机留 8px 余量（手指点得准），PC 只留 2px（避免点空白也触发）
+    local pad = IS_MOBILE and 8 or 2
+    local hitSize = size + pad * 2
     local hit = mk("TextButton", {
         Name = "CheckHit",
-        Size = UDim2.new(0, size + 16, 0, size + 16),
-        Position = UDim2.new(1, rightOffset - (size + 16), 0.5, -(size + 16) / 2),
+        Size = UDim2.new(0, hitSize, 0, hitSize),
+        Position = UDim2.new(1, rightOffset - hitSize, 0.5, -hitSize / 2),
         BackgroundTransparency = 1,
         Text = "",
         ZIndex = 20,
@@ -1095,10 +1396,12 @@ local function makeNumberInput(parent, cfg, onChange)
 
     if box.Focused then
         box.Focused:Connect(function()
+            playClick()
             tween(st, 0.12, { Color = T.accent, Transparency = 0 })
         end)
     end
     box.FocusLost:Connect(function()
+        playClick()
         tween(st, 0.12, { Color = T.boxStroke, Transparency = 0.3 })
         commit()
     end)
@@ -1531,8 +1834,10 @@ local function makeFoldable(tab, opts)
 end
 -- 遮罩点击：只有点在面板矩形之外才关闭（原版逻辑）
 local function bindShieldClose(self)
+    -- 遮罩铺满全屏，点击面板内部时也会先命中它。
+    -- 所以必须【先判断是否真的点在面板外】，确认要关闭了才播音效，
+    -- 否则点行内任何位置都会先响一声（用户感知为「点哪都响」）。
     self.Shield.MouseButton1Click:Connect(function()
-        playClick()
         -- 加载动画期间不许关
         if self.Busy then return end
 
@@ -1541,8 +1846,13 @@ local function bindShieldClose(self)
         local asz = self.Panel.AbsoluteSize
         if mp.X >= ap.X and mp.X <= ap.X + asz.X
             and mp.Y >= ap.Y and mp.Y <= ap.Y + asz.Y then
+            -- 点在面板内部：交给面板内的控件自己处理，这里什么都不做
             return
         end
+
+        -- 确认点在面板外，才播关闭音效
+        playClick()
+
         -- 标记：这次关闭来自点击边界外（由 SetVisible 内部消费）
         self._closedByShield = true
         self:SetVisible(false)
@@ -1713,6 +2023,61 @@ function UI.Create(opts)
         local dragStartX, dragStartY, dragStartCanvas = 0, 0, 0
         local lastDragX = 0
 
+        -- 惯性滑行（力度决定滑多远）
+        local inertiaConn = nil
+        local inertiaVel = 0
+        local inertiaFriction = 0.92
+        local samples = {}
+
+        local function stopInertia()
+            if inertiaConn then
+                pcall(function() inertiaConn:Disconnect() end)
+                inertiaConn = nil
+            end
+            inertiaVel = 0
+        end
+
+        -- 力度映射：轻推快停，用力甩滑得远
+        local function applyForce(rawSpeed)
+            local s = math.abs(rawSpeed)
+            if s < 0.6 then
+                return rawSpeed * 0.55, 0.80
+            elseif s < 2.5 then
+                local k = (s - 0.6) / 1.9
+                return rawSpeed * (0.75 + k * 0.35), 0.88 + k * 0.04
+            else
+                local k = math.min(1, (s - 2.5) / 4)
+                return math.min(rawSpeed * 1.15, 70), 0.94 + k * 0.025
+            end
+        end
+
+        local function startInertia()
+            if math.abs(inertiaVel) < 0.12 then return end
+            stopInertia()
+            local v = inertiaVel
+            local fr = inertiaFriction
+            inertiaConn = RunService.RenderStepped:Connect(function()
+                if not bar or not bar.Parent then
+                    stopInertia()
+                    return
+                end
+                v = v * fr
+                if math.abs(v) < 0.12 then
+                    stopInertia()
+                    return
+                end
+                local sc2 = (self.Scale and self.Scale.Scale) or 1
+                if sc2 <= 0 then sc2 = 1 end
+                local maxX = math.max(0, bar.CanvasSize.X.Offset * sc2 - bar.AbsoluteSize.X)
+                local cur = bar.CanvasPosition.X
+                local nxt = math.clamp(cur + v, 0, maxX)
+                bar.CanvasPosition = Vector2.new(nxt, 0)
+                if math.abs(nxt - cur) < 0.5 then
+                    stopInertia()
+                end
+            end)
+        end
+
         local function inBar(px, py)
             local ap, sz = bar.AbsolutePosition, bar.AbsoluteSize
             return px >= ap.X and px <= ap.X + sz.X
@@ -1731,12 +2096,14 @@ function UI.Create(opts)
             local it = input.UserInputType
             if it ~= Enum.UserInputType.Touch and it ~= Enum.UserInputType.MouseButton1 then return end
             if not inBar(input.Position.X, input.Position.Y) then return end
+            stopInertia()
             dragging = true
             dragMoved = false
             dragStartX = input.Position.X
             dragStartY = input.Position.Y
             lastDragX = input.Position.X
             dragStartCanvas = bar.CanvasPosition.X
+            samples = { { t = os.clock(), p = bar.CanvasPosition.X } }
         end
 
         local function onMove(input)
@@ -1770,6 +2137,13 @@ function UI.Create(opts)
             lastDragX = curX
             local target = math.clamp(bar.CanvasPosition.X + step, 0, maxX)
             bar.CanvasPosition = Vector2.new(target, 0)
+
+            -- 采样（最近 80ms）
+            local now = os.clock()
+            table.insert(samples, { t = now, p = bar.CanvasPosition.X })
+            while #samples > 2 and (now - samples[1].t) > 0.08 do
+                table.remove(samples, 1)
+            end
         end
 
         local function onEnd(input)
@@ -1779,7 +2153,21 @@ function UI.Create(opts)
                 dragging = false
                 if dragMoved then
                     getgenv()._CDMUITabDragBlock = os.clock() + 0.15
+
+                    -- 用最近采样估算速度，按力度映射滑行距离
+                    if #samples >= 2 then
+                        local first, last = samples[1], samples[#samples]
+                        local dt = last.t - first.t
+                        if dt > 0.001 then
+                            local raw = ((last.p - first.p) / dt) / 60
+                            inertiaVel, inertiaFriction = applyForce(raw)
+                        end
+                    end
+                    if math.abs(inertiaVel) >= 0.12 then
+                        startInertia()
+                    end
                 end
+                samples = {}
                 dragMoved = false
                 lastDragX = 0
                 -- 延迟恢复，确保这次松手已经处理完
@@ -1824,6 +2212,9 @@ function UI.Create(opts)
     self.List = list
     list:SetAttribute("__basePos", list.Position)
     list:SetAttribute("__baseTrans", list.BackgroundTransparency)
+
+    -- 内容区：拖动 / 滚轮都带惯性
+    self._listInertia = attachInertia(list, { axis = "Y" })
 
     -- 底部提示
     local hint = mk("TextLabel", {
@@ -4701,7 +5092,17 @@ function Tab:Slider(cfg)
         ZIndex = 9,
     }, holder)
 
-    local function setFromX(x)
+    -- 音效节流：拖动时每 90ms 最多响一次，避免连续爆音
+    local lastSfx = 0
+    local function tickSfx()
+        local now = os.clock()
+        if now - lastSfx >= 0.09 then
+            lastSfx = now
+            playClick()
+        end
+    end
+
+    local function setFromX(x, silentSfx)
         local absX = track.AbsolutePosition.X
         local alpha = math.clamp((x - absX) / SLIDER_W, 0, 1)
         local raw = minV + (maxV - minV) * alpha
@@ -4710,6 +5111,7 @@ function Tab:Slider(cfg)
         end
         value = math.clamp(raw, minV, maxV)
         render()
+        if not silentSfx then tickSfx() end
         if cfg.Callback then UI.safeCall(cfg.Callback, value) end
         self.Window.State[key] = value
     end
@@ -4717,8 +5119,15 @@ function Tab:Slider(cfg)
     local dragging = false
     hit.MouseButton1Down:Connect(function()
         dragging = true
+        lastSfx = 0            -- 每次按下都保证响一声
         local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
         if ok and loc then setFromX(loc.X) end
+    end)
+
+    -- 松手时也响一声（确认操作结束）
+    hit.MouseButton1Up:Connect(function()
+        lastSfx = 0
+        tickSfx()
     end)
     UserInputService.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -5325,8 +5734,20 @@ function Tab:ColorPicker(cfg)
         apply()
     end
 
+    -- 音效节流：拖动时每 90ms 最多响一次
+    local lastHueSfx = 0
+    local function hueSfx()
+        local now = os.clock()
+        if now - lastHueSfx >= 0.09 then
+            lastHueSfx = now
+            playClick()
+        end
+    end
+
     hueHit.MouseButton1Down:Connect(function()
         dragging = true
+        lastHueSfx = 0
+        hueSfx()
         local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
         if ok and loc then setHue(loc.X) end
     end)
@@ -5494,6 +5915,7 @@ function Tab:TextBox(cfg)
     }, holder)
 
     box.FocusLost:Connect(function()
+        playClick()
         value = box.Text
         self.Window.State[key] = value
         if cfg.Callback then UI.safeCall(cfg.Callback, value) end
