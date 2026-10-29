@@ -3053,60 +3053,6 @@ function UI.Create(opts)
         ZIndex = 3,
     }, panel)
 
-    -- ============================================================
-    -- 卸载按钮（大标题右侧）
-    --   顶栏按钮是常驻的，面板开关不影响它。
-    --   真正要退出脚本时点这个，会播出场动画然后销毁。
-    -- ============================================================
-    local unloadBtnW = IS_MOBILE and 76 or 68
-    local unloadBtnH = IS_MOBILE and 34 or 30
-    local unloadBtn = mk("TextButton", {
-        Name = "UnloadBtn",
-        Size = UDim2.fromOffset(unloadBtnW, unloadBtnH),
-        Position = UDim2.new(1, -unloadBtnW - 16, 0, 8 + (56 - unloadBtnH) / 2),
-        BackgroundColor3 = Color3.fromRGB(42, 26, 30),
-        BackgroundTransparency = 0.35,
-        BorderSizePixel = 0,
-        Text = "卸载",
-        TextColor3 = Color3.fromRGB(232, 108, 108),
-        Font = FONT_BOLD,
-        TextSize = IS_MOBILE and 15 or 13,
-        AutoButtonColor = false,
-        ZIndex = 6,
-        Active = true,
-    }, panel)
-    corner(unloadBtn, 6)
-    local unloadStroke = stroke(unloadBtn, Color3.fromRGB(120, 56, 60), 1, 0.4)
-
-    local unloadHover = false
-    local function unloadVisual()
-        pcall(function()
-            Anim.to(unloadBtn, {
-                BackgroundColor3 = unloadHover and Color3.fromRGB(64, 32, 38)
-                    or Color3.fromRGB(42, 26, 30),
-            }, 0.12)
-        end)
-    end
-    unloadBtn.MouseEnter:Connect(function() unloadHover = true; unloadVisual() end)
-    unloadBtn.MouseLeave:Connect(function() unloadHover = false; unloadVisual() end)
-
-    bindTap(unloadBtn, function()
-        playClick()
-        -- 二次确认，防止误触
-        UI.Dialog({
-            Title = "确认卸载",
-            Text = "卸载后所有功能会立即关闭，\n需要重新执行脚本才能恢复。",
-            Buttons = {
-                { Text = "取消" },
-                { Text = "卸载", Callback = function()
-                    pcall(function() self:Destroy() end)
-                end },
-            },
-        })
-    end)
-
-    self.UnloadBtn = unloadBtn
-
     -- Tab 栏
     local tabBar = mk("ScrollingFrame", {
         Name = "TabBar",
@@ -5252,6 +5198,24 @@ function Window:SetVisible(visible, instant)
 end
 function Window:Toggle()
     self:SetVisible(not self.Visible)
+end
+
+-- 卸载（带二次确认），Tab 里的「卸载脚本」按钮调这个
+function Window:ConfirmUnload()
+    local function doUnload()
+        pcall(function() self:Destroy() end)
+    end
+    if not UI.Dialog then doUnload(); return end
+    pcall(function()
+        UI.Dialog({
+            Title = "确认卸载",
+            Text = "卸载后所有功能会立即关闭，\n需要重新执行脚本才能恢复。",
+            Buttons = {
+                { Text = "取消" },
+                { Text = "卸载", Callback = doUnload },
+            },
+        })
+    end)
 end
 
 -- 手动触发顶栏指引（调试 / 外部调用）
