@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.1                                                 ║
+    ║  CDMUI 2.6.2                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.1  修复切页后页面永久隐藏
+-- CDMUI v2.6.2  修复切页后行全部隐藏（页面空白）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.1"
+UI.Version = "2.6.2"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4843,6 +4843,37 @@ function Window:SelectTab(index, instant)
     if vpW <= 1 then vpW = 380 end
 
     local dir = (index > last) and 1 or -1
+
+    -- ============================================================
+    -- 行可见性：每页的行归属自己的 Page 容器，
+    --   切页时必须把当前页的所有行设为 Visible，
+    --   否则页面滑进来了但里面是空的。
+    -- ============================================================
+    for i, tt in ipairs(self.Tabs) do
+        local isActive = (i == index)
+        for _, w in ipairs(tt.Widgets) do
+            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                local base = w:GetAttribute("__baseH")
+                if not base or base <= 0 then
+                    local cur = w.Size.Y.Offset
+                    if cur > 0 then
+                        w:SetAttribute("__baseH", cur)
+                        base = cur
+                    end
+                end
+                w.Visible = isActive
+                if isActive and base and base > 0 then
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base)
+                end
+            end
+        end
+        -- 子行按展开状态恢复
+        for _, r in ipairs(self.ExpandRestorers) do
+            if r.tab == tt and r.apply then
+                pcall(r.apply, isActive and r.get() == true or false, false)
+            end
+        end
+    end
 
     -- instant：直接落终态
     if instant then
