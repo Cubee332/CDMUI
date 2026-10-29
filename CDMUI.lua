@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.7.0                                                 ║
+    ║  CDMUI 2.6.5                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.7.0  CanvasGroup 全局淡入淡出 + 顶栏音效修复
+-- CDMUI v2.6.5  修复滚动到底部后重开会被上拉
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.7.0"
+UI.Version = "2.6.5"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -726,8 +726,7 @@ local function guiParent()
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
--- 点击音效：不节流的底层实现
-local function playClickRaw()
+local function playClick()
     pcall(function()
         local s = Instance.new("Sound")
         s.SoundId = CLICK_SFX
@@ -737,22 +736,6 @@ local function playClickRaw()
         s:Play()
         Debris:AddItem(s, 2)
     end)
-end
-
--- 普通控件的点击音效：40ms 内只播一次
---   （同一帧里多个控件同时响应时避免叠音，但不影响正常的连续点击）
-local _lastClickAt = 0
-local function playClick()
-    local now = os.clock()
-    if now - _lastClickAt < 0.04 then return end
-    _lastClickAt = now
-    playClickRaw()
-end
-
--- 开关类音效：每次都播，不节流
---   （面板开/关这种明确的操作反馈，节流会让人觉得"没反应"）
-local function playToggleSound()
-    playClickRaw()
 end
 
 -- 导出：外部自定义控件也能用同一套点击音效
@@ -959,9 +942,7 @@ local function bindTap(btn, fn)
 
         -- 手机手指滑动时抖动大，阈值放宽
         if moved < (IS_MOBILE and 18 or 12) then
-            if not btn:GetAttribute("__noAutoSound") then
-                playClick()
-            end
+            playClick()
             UI.safeCall(fn)
         end
     end)
@@ -2145,19 +2126,7 @@ local function createTopbarButton(self, labelText)
         applyVisual()
     end
 
-    -- 防抖：300ms 内只响应一次
-    --   连续快速点击会让 入场/出场 动画互相打断，
-    --   表现为「按钮来回闪白 + 音效叠在一起」
-    click:SetAttribute("__noAutoSound", true)
-    local lastToggleAt = 0
     bindTap(click, function()
-        local now = os.clock()
-        if now - lastToggleAt < 0.30 then return end
-        -- 动画播放中也不响应，避免中途打断
-        if self.Busy then return end
-        lastToggleAt = now
-
-        playToggleSound()
         if self.Visible then self._closedByTopbar = true end
         self:SetVisible(not self.Visible)
         if self.TopbarSetActive then self.TopbarSetActive(self.Visible) end
@@ -2450,24 +2419,16 @@ function UI.Create(opts)
     self.Shield = shield
 
     -- 主面板
-    -- 用 CanvasGroup 而不是普通 Frame：
-    --   CanvasGroup 有 GroupTransparency，能一次性让所有子元素（行、按钮、文字）
-    --   一起变透明。普通 Frame 的 BackgroundTransparency 只影响自己的底色，
-    --   子元素完全不受影响 —— 这就是之前"面板淡出了但按钮和字还在"的原因。
-    local panel = mk("CanvasGroup", {
+    local panel = mk("Frame", {
         Name = "Panel",
         Size = UDim2.new(0, PANEL_W, 0, PANEL_H),
         AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.new(0.5, 0, 0.5, 10),
+        Position = UDim2.new(0.5, 0, 0.5, 10),   -- 略微上移，视觉更平衡
         BackgroundColor3 = T.panel,
-        -- CanvasGroup 里 BackgroundTransparency 和 GroupTransparency 是相乘的，
-        -- 两个都设 0.05 会变成 0.0975，看起来比预期透很多。
-        -- 底色交给 GroupTransparency 统一控制，这里保持 0（完全不透明）。
-        BackgroundTransparency = 0,
+        BackgroundTransparency = 0.05,
         BorderSizePixel = 0,
         ZIndex = 2,
         Active = true,
-        GroupTransparency = 0.05,
     }, gui)
     corner(panel, 8)
     stroke(panel, T.panelStroke, 1, 0.5)
@@ -3042,12 +3003,9 @@ function UI.Create(opts)
 
     if opts.AutoOpen ~= false then
         self.Visible = true
-        -- 同步启用（不要 defer）：面板构建完就立刻让 Gui 参与渲染，
-        --   否则从 Create 返回到下一帧之间会有一次"什么都没有"的空窗
         self.Gui.Enabled = true
         self.Panel.Visible = false
-        -- 加载层同步创建，让第一帧就有内容
-        task.spawn(function()
+        task.defer(function()
             if not self.Destroyed and not UI.IsStale() then self:_PlayIntro() end
         end)
     end
@@ -3101,11 +3059,6 @@ function Window:_PlayIntro()
 
     local gui = self.Gui
     local panel = self.Panel
-
-    -- 立刻启用 Gui 并确保加载层可见
-    --   UI.Create 构建完所有控件后可能已经过了好几帧，
-    --   如果等 defer 再显示，用户会先看到"什么都没有"，然后突然冒出加载框。
-    gui.Enabled = true
 
     -- 加载期间锁住关闭入口
     self.Busy = true
@@ -3173,14 +3126,11 @@ function Window:_PlayIntro()
     }, track)
     corner(fill, 2)
 
-    -- 淡入：从完全透明 + 略小开始，平滑浮现
-    splash.Position = UDim2.new(0.5, 0, 0.5, 6)
-    Anim.to(splash, {
-        BackgroundTransparency = 0.05,
-        Position = UDim2.new(0.5, 0, 0.5, 0),
-    }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-    Anim.to(st, { Transparency = 0.4 }, 0.30)
-    Anim.to(splashScale, { Scale = 1 }, 0.42,
+    -- 淡入
+    Anim.to(splash, { BackgroundTransparency = 0.05 }, 0.22,
+        Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    Anim.to(st, { Transparency = 0.4 }, 0.22)
+    Anim.to(splashScale, { Scale = 1 }, 0.30,
         Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
     -- ===== 进度推进 =====
@@ -3264,42 +3214,18 @@ function Window:_PlayIntro()
     task.delay(acc + 0.30, function()
         if not splash.Parent then return end
 
-        -- ============================================================
-        -- 淡出 splash：和主面板入场交叉进行
-        --   之前是 splash 完全消失后才显示面板，中间有一帧"空场"，
-        --   看起来像"啪"一下切过去。现在让两者重叠：
-        --     t=0      splash 开始淡出，主面板同时开始入场
-        --     t=0.18   splash 几乎不可见
-        --     t=0.30   splash 销毁（此时面板已经浮现）
-        -- ============================================================
-        -- 主面板：提前显示，与 splash 交叉淡入
-        panel.Visible = true
-        self:_UnlockMouse()
-        panel.Position = UDim2.new(0.5, 0, 0.5, 12)
-        pcall(function() panel.GroupTransparency = 0.75 end)
-        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.92 end
-
-        Anim.to(panel, {
-            Position = UDim2.new(0.5, 0, 0.5, 10),
-            GroupTransparency = 0.05,
-        }, 0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-        if self.Scale then
-            Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.40,
-                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-        end
-
-        -- splash 淡出（比面板入场稍快，形成"旧的退去、新的浮现"）
-        Anim.to(splash, { BackgroundTransparency = 1 }, 0.24,
-            Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-        Anim.to(st, { Transparency = 1 }, 0.24)
-        if title then Anim.to(title, { TextTransparency = 1 }, 0.18) end
-        if status then Anim.to(status, { TextTransparency = 1 }, 0.18) end
-        Anim.to(track, { BackgroundTransparency = 1 }, 0.18)
-        Anim.to(fill, { BackgroundTransparency = 1 }, 0.18)
-        Anim.to(splashScale, { Scale = 0.96 }, 0.26,
+        -- 淡出 splash
+        Anim.to(splash, { BackgroundTransparency = 1 }, 0.20,
+            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        Anim.to(st, { Transparency = 1 }, 0.20)
+        if title then Anim.to(title, { TextTransparency = 1 }, 0.16) end
+        if status then Anim.to(status, { TextTransparency = 1 }, 0.16) end
+        Anim.to(track, { BackgroundTransparency = 1 }, 0.16)
+        Anim.to(fill, { BackgroundTransparency = 1 }, 0.16)
+        Anim.to(splashScale, { Scale = 0.94 }, 0.20,
             Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
-        task.delay(0.28, function()
+        task.delay(0.22, function()
             -- 已经被新的运行取代，收干净走人
             if UI.IsStale() or self.Destroyed then
                 if splash.Parent then splash:Destroy() end
@@ -3307,7 +3233,10 @@ function Window:_PlayIntro()
             end
             if splash.Parent then splash:Destroy() end
 
-            -- 面板已经在交叉淡入阶段显示并开始动画了，这里只做收尾
+            -- 显示主面板并播放入场
+            panel.Visible = true
+            self:_UnlockMouse()
+
             -- 加载动画到这里算放完了，这时才挂顶栏按钮
             if self._topbarPending then
                 self._topbarPending = false
@@ -3323,8 +3252,10 @@ function Window:_PlayIntro()
                     self.Busy = false
                 end
             end)
+            -- 不要设 0（否则面板完全不可见，且难以恢复）
+            if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.9 end
+            panel.BackgroundTransparency = 1
 
-            -- 内容依次上浮淡入（和面板交叉淡入配合）
             for _, w in ipairs(self:_ContentParts()) do
                 if not w:GetAttribute("__basePos") then
                     w:SetAttribute("__basePos", w.Position)
@@ -3337,7 +3268,7 @@ function Window:_PlayIntro()
             end
 
             panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-            Anim.to(panel, { GroupTransparency = 0.05 }, 0.24,
+            Anim.to(panel, { BackgroundTransparency = 0.05 }, 0.24,
                 Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
             if self.Scale then
                 Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.40,
@@ -4362,9 +4293,6 @@ function Window:SetVisible(visible, instant)
     local BASE_TRANS = 0.05
 
     -- 面板里的内容行（Tab 栏 + 滚动区）
-    --   注意：不要包含 BigTitle
-    --   标题是全透明的纯文字，参与淡出动画会把它的
-    --   BackgroundTransparency 改成半透明，恢复时又变成实心灰底
     local function contentParts()
         local parts = {}
         if self.TabBar then table.insert(parts, self.TabBar) end
@@ -4400,8 +4328,7 @@ function Window:SetVisible(visible, instant)
         if instant then
             panel.Position = UDim2.new(0.5, 0, 0.5, 10)
             panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-            panel.BackgroundTransparency = 0
-            pcall(function() panel.GroupTransparency = 0.05 end)
+            panel.BackgroundTransparency = BASE_TRANS
             if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
             for _, w in ipairs(contentParts()) do
                 local base = w:GetAttribute("__basePos")
@@ -4423,7 +4350,7 @@ function Window:SetVisible(visible, instant)
             -- 首帧：完全收起到中心，透明
             panel.Position = UDim2.new(0.5, 0, 0.5, 24)
             panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-            pcall(function() panel.GroupTransparency = 0.5 end)
+            panel.BackgroundTransparency = 0.4
             if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.82 end
 
             -- 内容先藏起来
@@ -4441,7 +4368,7 @@ function Window:SetVisible(visible, instant)
             -- 面板：上浮 + 淡入 + 弹性放大
             Anim.to(panel, {
                 Position = UDim2.new(0.5, 0, 0.5, 10),
-                GroupTransparency = 0.05,
+                BackgroundTransparency = BASE_TRANS,
             }, 0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 
             if self.Scale then
@@ -4466,46 +4393,35 @@ function Window:SetVisible(visible, instant)
         -- 恢复当前页滚动位置（等面板动画开始后再恢复，避免被布局打断）
         self:_RestorePageScroll()
 
-        -- ============================================================
-        -- 入场：和出场对称的「浮现」感
-        --   之前起点透明度就是 BASE_TRANS（几乎不透明），
-        --   加上面板突然出现，看起来像"啪"一下蹦出来。
-        --   现在起点更透明、更小，用 Quint Out 平滑浮上来。
-        -- ============================================================
-        panel.Position = UDim2.new(0.5, 0, 0.5, 14)
+        -- 起点：稍微缩小、稍微下移
+        panel.Position = UDim2.new(0.5, 0, 0.5, 10)
         panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-        pcall(function() panel.GroupTransparency = 1 end)
-        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.90 end
+        panel.BackgroundTransparency = BASE_TRANS
+        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.88 end
 
-        -- 面板：上浮 + 整体淡入（一次动画搞定所有属性）
-        Anim.to(panel, {
-            Position = UDim2.new(0.5, 0, 0.5, 10),
-            GroupTransparency = 0.05,
-        }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        -- 面板：弹性放大（Back 过冲）
+        Anim.to(panel, { Position = UDim2.new(0.5, 0, 0.5, 10) }, 0.34,
+            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        if self.Scale then Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.42,
+            Enum.EasingStyle.Back, Enum.EasingDirection.Out) end
 
-        -- 缩放：轻微弹性回弹（Back Out，末尾有过冲）
-        if self.Scale then
-            Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.38,
-                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-        end
-
-        -- 内容：从下方 12px 上浮 + 淡入，依次错开
+        -- 内容：上移 + 淡入，依次错开
         local parts = contentParts()
-        local delay = 0.10
+        local delay = 0.08
         for _, w in ipairs(parts) do
             if not w:GetAttribute("__basePos") then
                 w:SetAttribute("__basePos", w.Position)
             end
             local base = w:GetAttribute("__basePos")
             w.Position = UDim2.new(base.X.Scale, base.X.Offset,
-                                   base.Y.Scale, base.Y.Offset + 12)
-            w.BackgroundTransparency = 1
+                                   base.Y.Scale, base.Y.Offset + 14)
+            w.BackgroundTransparency = math.min(1, (w:GetAttribute("__baseTrans") or 0) + 0.6)
 
             Anim.to(w, {
                 Position = base,
                 BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
             }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
-            delay = delay + 0.055
+            delay = delay + 0.06
         end
 
     else
@@ -4517,39 +4433,27 @@ function Window:SetVisible(visible, instant)
             return
         end
 
-        -- ============================================================
-        -- 出场：三段时间轴，互相重叠，最后整体淡出
-        --   之前 0.16s 缩到 0.94 就硬切 Visible，看起来像"啪"一下没了。
-        --   现在：
-        --     ① 内容先轻微下沉淡出（0.18s）
-        --     ② 面板同步缩小 + 下沉（0.26s，比内容慢一拍）
-        --     ③ 面板整体透明度淡出（0.22s，延迟 0.06s 启动）
-        --   总时长 0.30s，收尾平滑
-        -- ============================================================
+        -- 收起：缩小 + 下沉 + 淡出
         local parts = contentParts()
         for i, w in ipairs(parts) do
             local base = w:GetAttribute("__basePos") or w.Position
             Anim.to(w, {
                 Position = UDim2.new(base.X.Scale, base.X.Offset,
-                                     base.Y.Scale, base.Y.Offset + 10),
+                                     base.Y.Scale, base.Y.Offset + 8),
                 BackgroundTransparency = 1,
-            }, 0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
-                (i - 1) * 0.025)
+            }, 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+                (i - 1) * 0.02)
         end
 
-        -- 面板缩小（Back In 有轻微"被吸走"的感觉）
         if self.Scale then
-            Anim.to(self.Scale, { Scale = (self.BaseScale or 1) * 0.90 }, 0.26,
-                Enum.EasingStyle.Back, Enum.EasingDirection.In)
+            Anim.to(self.Scale, { Scale = (self.BaseScale or 1) * 0.94 }, 0.16,
+                Enum.EasingStyle.Quad, Enum.EasingDirection.In)
         end
-
-        -- 面板下沉 + 整体淡出（一次动画）
         Anim.to(panel, {
-            Position = UDim2.new(0.5, 0, 0.5, 14),
-            GroupTransparency = 1,
-        }, 0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            Position = UDim2.new(0.5, 0, 0.5, 8),
+        }, 0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
-        task.delay(0.30, function()
+        task.delay(0.17, function()
             if not self.Visible and self.Gui then
                 self.Gui.Enabled = false
                 if self.Panel then self.Panel.Visible = false end
@@ -4561,16 +4465,13 @@ function Window:SetVisible(visible, instant)
                         pcall(function() self:_ShowButtonGuide() end)
                     end)
                 end
-                -- 复位所有出场动画改过的属性，否则下次打开会从中间态开始
                 self.Panel.Position = UDim2.new(0.5, 0, 0.5, 10)
                 self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-                self.Panel.BackgroundTransparency = 0
-                pcall(function() self.Panel.GroupTransparency = 0.05 end)
                 if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
                 for _, w in ipairs(contentParts()) do
                     local base = w:GetAttribute("__basePos")
                     if base then w.Position = base end
-                    w.BackgroundTransparency = w:GetAttribute("__baseTrans") or 0
+                    w.BackgroundTransparency = 0
                 end
             end
         end)
