@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.4.1                                                 ║
+    ║  CDMUI 2.4.2                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.4.1  恢复切页高度动画（逐帧手写 + token 取消）
+-- CDMUI v2.4.2  切页两段动画（先收后展）+ 点已激活Tab不重播
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.4.1"
+UI.Version = "2.4.2"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4682,6 +4682,12 @@ function Window:SelectTab(index, instant)
     if not tab then return end
     local last = self.TabIndex
 
+    -- 点已激活的 Tab：只滚回顶部，绝不重播展开动画
+    if last == index and not instant then
+        self:_ScrollToTop(0.34)
+        return
+    end
+
     -- 切页 token：每次切页自增，旧动画看到 token 变了立刻放弃
     self._tabToken = (self._tabToken or 0) + 1
     local token = self._tabToken
@@ -4705,7 +4711,7 @@ function Window:SelectTab(index, instant)
         end)
     end
 
-    -- 记录行原始高度
+    -- 取行的原始高度
     local function baseH(w)
         local b = w:GetAttribute("__baseH")
         if not b or b <= 0 then
@@ -4715,49 +4721,57 @@ function Window:SelectTab(index, instant)
         return b or 0
     end
 
-    -- 立即把非当前页全部清空（保证布局干净，不留残留）
-    for i, tt in ipairs(self.Tabs) do
-        if i ~= index then
-            for _, w in ipairs(tt.Widgets) do
-                if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                    w.Visible = false
-                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                end
+    -- 立即归零并隐藏一整页（瞬时，不走动画）
+    local function hardHide(tt)
+        if not tt then return end
+        for _, w in ipairs(tt.Widgets) do
+            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                w.Visible = false
+                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
             end
-            for _, r in ipairs(self.ExpandRestorers) do
-                if r.tab == tt and r.apply then pcall(r.apply, false, false) end
-            end
+        end
+        for _, r in ipairs(self.ExpandRestorers) do
+            if r.tab == tt and r.apply then pcall(r.apply, false, false) end
         end
     end
 
-    -- 滚动位置
-    if last == index and not instant then
-        self:_ScrollToTop(0.34)
-    else
-        self.List.CanvasPosition = Vector2.new(0, 0)
+    -- 非当前页、非上一页：瞬时清掉（保证布局干净）
+    for i, tt in ipairs(self.Tabs) do
+        if i ~= index and i ~= last then hardHide(tt) end
     end
 
-    -- 悬停清理
+    self.List.CanvasPosition = Vector2.new(0, 0)
+
     task.defer(function()
         if not self.Destroyed then
             pcall(function() self:_ResetAllRowHover() end)
         end
     end)
 
-    -- ============================================================
-    -- 当前页：显示 + 高度动画
-    --   动画用「逐帧手动写」而不是 TweenService：
-    --     · token 变化时能立刻停手（TweenService 停不干净）
-    --     · 每帧只写一次，不会和 UIListLayout 打架
-    -- ============================================================
-    local rows = {}
+    -- 旧页：收集要收起的行（从当前高度收到 0）
+    local oldTab = self.Tabs[last]
+    local oldRows = {}
+    if oldTab and not instant then
+        for _, w in ipairs(oldTab.Widgets) do
+            if w and w.Parent and w.Visible
+               and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                local cur = w.Size.Y.Offset
+                if cur > 0.5 then
+                    oldRows[#oldRows + 1] = { obj = w, from = cur }
+                end
+            end
+        end
+    end
+
+    -- 新页：收集要展开的行（从 0 涨到 base）
+    local newRows = {}
     for _, w in ipairs(tab.Widgets) do
         if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
             local b = baseH(w)
             w.Visible = true
             if b > 0 then
                 w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                rows[#rows + 1] = { obj = w, base = b }
+                newRows[#newRows + 1] = { obj = w, base = b }
             end
         end
     end
@@ -4769,55 +4783,75 @@ function Window:SelectTab(index, instant)
         end
     end
 
-    if instant or #rows == 0 then
-        for _, it in ipairs(rows) do
-            it.obj.Size = UDim2.new(it.obj.Size.X.Scale, it.obj.Size.X.Offset, 0, it.base)
+    -- instant / 没有可收起的行：直接落终态
+    if instant or #oldRows == 0 then
+        hardHide(oldTab)
+        for _, it in ipairs(newRows) do
+            if it.obj and it.obj.Parent then
+                it.obj.Size = UDim2.new(it.obj.Size.X.Scale, it.obj.Size.X.Offset, 0, it.base)
+            end
         end
         return
     end
 
-    -- 逐帧展开：总时长 0.30s，每行错开 0.006s
-    local DUR = 0.30
-    local STAGGER = 0.006
-    local t0 = os.clock()
+    -- ============================================================
+    -- 两段动画：先收旧页，再展新页
+    --   逐帧手写而不是 TweenService：
+    --     token 变化能立刻 return，不留残余写入
+    -- ============================================================
+    local COLLAPSE = 0.15
+    local EXPAND = 0.26
+    local STAGGER_OUT = 0.004
+    local STAGGER_IN = 0.005
 
     task.spawn(function()
+        -- ① 收起旧页（Quad In：起步慢、末尾快，像被吸走）
+        local t0 = os.clock()
         while true do
-            -- token 变了 / 面板没了 → 立刻放弃，不写任何属性
             if self.Destroyed or self._tabToken ~= token then return end
-
-            local elapsed = os.clock() - t0
-            local allDone = true
-
-            for i, it in ipairs(rows) do
-                local startAt = (i - 1) * STAGGER
-                local localT = (elapsed - startAt) / DUR
-                if localT < 0 then
-                    allDone = false
-                elseif localT < 1 then
-                    allDone = false
-                    -- Quart Out：起步快末尾缓，收得干净
-                    local p = 1 - (1 - localT) ^ 3
-                    local h = it.base * p
-                    if it.obj and it.obj.Parent then
-                        it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
-                            it.obj.Size.X.Offset, 0, h)
-                    end
-                else
-                    -- 已完成：确保落到精确终态
-                    if it.obj and it.obj.Parent then
-                        local cur = it.obj.Size.Y.Offset
-                        if math.abs(cur - it.base) > 0.5 then
-                            it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
-                                it.obj.Size.X.Offset, 0, it.base)
-                        end
-                    end
+            local el = os.clock() - t0
+            local done = true
+            for i, it in ipairs(oldRows) do
+                local lt = (el - (i - 1) * STAGGER_OUT) / COLLAPSE
+                if lt < 1 then done = false end
+                local p
+                if lt <= 0 then p = 0
+                elseif lt >= 1 then p = 1
+                else p = lt * lt end
+                local h = it.from * (1 - p)
+                if it.obj and it.obj.Parent then
+                    it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
+                        it.obj.Size.X.Offset, 0, h)
                 end
             end
+            if done then break end
+            RunService.RenderStepped:Wait()
+        end
 
-            if allDone then
-                -- 最后再钉一次终态，防止浮点误差
-                for _, it in ipairs(rows) do
+        if self.Destroyed or self._tabToken ~= token then return end
+        hardHide(oldTab)
+
+        -- ② 展开新页（Quart Out：起步快、末尾缓）
+        local t1 = os.clock()
+        while true do
+            if self.Destroyed or self._tabToken ~= token then return end
+            local el = os.clock() - t1
+            local done = true
+            for i, it in ipairs(newRows) do
+                local lt = (el - (i - 1) * STAGGER_IN) / EXPAND
+                if lt < 1 then done = false end
+                local p
+                if lt <= 0 then p = 0
+                elseif lt >= 1 then p = 1
+                else p = 1 - (1 - lt) ^ 3 end
+                local h = it.base * p
+                if it.obj and it.obj.Parent then
+                    it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
+                        it.obj.Size.X.Offset, 0, h)
+                end
+            end
+            if done then
+                for _, it in ipairs(newRows) do
                     if it.obj and it.obj.Parent then
                         it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
                             it.obj.Size.X.Offset, 0, it.base)
@@ -4825,7 +4859,6 @@ function Window:SelectTab(index, instant)
                 end
                 return
             end
-
             RunService.RenderStepped:Wait()
         end
     end)
