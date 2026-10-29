@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.3.5                                                 ║
+    ║  CDMUI 2.3.6                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.3.5  优化切页动画：收展交叉淡入，消除硬切换
+-- CDMUI v2.3.6  修复切页后 Section 小标题变白
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.3.5"
+UI.Version = "2.3.6"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4706,9 +4706,16 @@ function Window:SelectTab(index, instant)
                 else
                     w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, visible and base or 0)
                 end
-                if w.Name == "Row" then
-                    w.BackgroundTransparency = 0.15
+                -- 恢复该行的原始透明度
+                --   不能写死 0.15：SectionRow 本来是全透明（1），
+                --   写死会让它变成半透明白底（切页后看到一片白条）
+                local origT = w:GetAttribute("__origBgTrans")
+                if origT == nil then
+                    -- 首次记录：用当前值作为基准
+                    origT = w.BackgroundTransparency
+                    w:SetAttribute("__origBgTrans", origT)
                 end
+                w.BackgroundTransparency = origT
             end
         end
         -- 子行：当前页按展开状态恢复，非当前页一律立即隐藏（不占位）
@@ -4799,9 +4806,16 @@ function Window:SelectTab(index, instant)
         for idx, w in ipairs(oldRows) do
             local fromBottom = (#oldRows - idx) * STAGGER_OUT
             -- Quint In：起步慢、末尾快，像被"吸走"，不会在结束瞬间掐断
+            --   淡出目标基于该行原始透明度，避免全透明的行被改成半透明
+            local origT = w:GetAttribute("__origBgTrans")
+            if origT == nil then
+                origT = w.BackgroundTransparency
+                w:SetAttribute("__origBgTrans", origT)
+            end
+            local fadeTo = math.min(1, origT + 0.5)
             Anim.to(w, {
                 Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0),
-                BackgroundTransparency = 0.65,
+                BackgroundTransparency = fadeTo,
             }, COLLAPSE_TIME, Enum.EasingStyle.Quint, Enum.EasingDirection.In, fromBottom)
         end
 
@@ -4855,11 +4869,15 @@ function Window:SelectTab(index, instant)
         for idx, w in ipairs(newRows) do
             local base = w:GetAttribute("__baseH") or 0
             -- 从透明开始，边撑开边淡入
-            --   Back Out：末尾轻微过冲再回落，有弹性不会生硬停住
+            local origT2 = w:GetAttribute("__origBgTrans")
+            if origT2 == nil then
+                origT2 = w.BackgroundTransparency
+                w:SetAttribute("__origBgTrans", origT2)
+            end
             pcall(function() w.BackgroundTransparency = 1 end)
             Anim.to(w, {
                 Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base),
-                BackgroundTransparency = 0.15,
+                BackgroundTransparency = origT2,
             }, EXPAND_TIME, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, showDelay)
 
             showDelay = showDelay + STAGGER_IN
@@ -5417,6 +5435,8 @@ local function baseRow(tab, height)
     -- 明确初始状态：不然 nil 和 false 混用，refreshHover 的
     -- wasIn 判断会漏掉第一次「进入」的转换
     row:SetAttribute("__hoverActive", false)
+    -- 记录原始背景透明度，切页动画要用（别写死 0.15）
+    row:SetAttribute("__origBgTrans", row.BackgroundTransparency)
     _G.__CDMUIHoverFns = _G.__CDMUIHoverFns or setmetatable({}, { __mode = "k" })
     _G.__CDMUIHoverFns[row] = { enter = onEnter, leave = onLeave }
 
@@ -7429,6 +7449,8 @@ function Tab:Section(cfg)
     }, self.Container)
     self.Items = self.Items + 1
     table.insert(self.Widgets, row)
+    -- 记录原始透明度（Section 是全透明 1）
+    row:SetAttribute("__origBgTrans", row.BackgroundTransparency)
 
     mk("TextLabel", {
         Name = "SectionTitle",
