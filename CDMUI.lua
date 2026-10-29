@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.8                                                 ║
+    ║  CDMUI 2.6.9                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.8  子项悬浮高亮加强（颜色变化）
+-- CDMUI v2.6.9  子项悬浮高亮微调（主行的一半）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.8"
+UI.Version = "2.6.9"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -488,7 +488,10 @@ local T = {
     row         = Color3.fromRGB(25, 25, 30),
     rowHover    = Color3.fromRGB(34, 34, 41),
     rowChild    = Color3.fromRGB(21, 21, 26),
-    childHover  = Color3.fromRGB(44, 44, 54),
+    -- 子行悬停色：比 rowChild 亮一点点就够
+    --   主行是 row(25,25,30) → rowHover(34,34,41)，差 +9/+9/+11
+    --   子行取一半：+4/+4/+5
+    childHover  = Color3.fromRGB(25, 25, 31),
 
     -- 文字
     text        = Color3.fromRGB(240, 240, 245),
@@ -6039,7 +6042,7 @@ function Tab:Expand(cfg)
                 hovered = true
                 tween(ch, 0.12, {
                     BackgroundColor3 = T.childHover,
-                    BackgroundTransparency = math.max(0, baseTrans - 0.06),
+                    BackgroundTransparency = math.max(0, baseTrans - 0.04),
                 })
             end)
             ch.MouseLeave:Connect(function()
@@ -6054,7 +6057,7 @@ function Tab:Expand(cfg)
                 _G.__CDMUIHoverFns[ch] = function()
                     if hovered then
                         ch.BackgroundColor3 = T.childHover
-                        ch.BackgroundTransparency = math.max(0, baseTrans - 0.06)
+                        ch.BackgroundTransparency = math.max(0, baseTrans - 0.04)
                     else
                         ch.BackgroundColor3 = baseColor
                         ch.BackgroundTransparency = baseTrans
