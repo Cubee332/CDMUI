@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.3.3                                                 ║
+    ║  CDMUI 2.3.4                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.3.3  修复首次加载时行悬停高亮残留
+-- CDMUI v2.3.4  修复拖动后停住再松手仍有惯性
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.3.3"
+UI.Version = "2.3.4"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1234,7 +1234,14 @@ local function attachInertia(frame, opts)
         dragging = false
 
         -- 用最近采样估算速度（像素/帧）
-        if #samples >= 2 then
+        --   关键：先看「最后一次移动距现在多久」
+        --   用户拖完停住再松手时，samples 里的旧数据会让速度虚高，
+        --   表现为「明明停住了还是滑一下」。停手超过 90ms 直接算静止。
+        local nowT = os.clock()
+        local lastS = samples[#samples]
+        local idle = lastS and (nowT - lastS.t) or 999
+
+        if idle < 0.09 and #samples >= 2 then
             local first, last = samples[1], samples[#samples]
             local dt = last.t - first.t
             local dp = last.p - first.p
@@ -1244,6 +1251,9 @@ local function attachInertia(frame, opts)
             elseif math.abs(dp) > 4 then
                 velocity, forceFriction = applyForce(dp * 0.35)
             end
+        else
+            -- 停住了：不滑行
+            velocity, forceFriction = 0, 0
         end
 
         -- 位移不足：视为点击，不滑行
@@ -2635,10 +2645,20 @@ function UI.Create(opts)
             bar.CanvasPosition = Vector2.new(target, 0)
 
             -- 采样（最近 80ms）
+            --   同时把超过 150ms 的旧采样全部丢掉：
+            --   用户「拖一下→停住→再拖一下」时，中间的停顿会把两段位移连起来算，
+            --   速度虚高导致松手后莫名滑一下。
             local now = os.clock()
             table.insert(samples, { t = now, p = bar.CanvasPosition.X })
             while #samples > 2 and (now - samples[1].t) > 0.08 do
                 table.remove(samples, 1)
+            end
+            -- 有超过 150ms 的空档：说明中途停过，把之前的数据全清掉
+            for i = #samples - 1, 1, -1 do
+                if (now - samples[i].t) > 0.15 then
+                    for _ = 1, i do table.remove(samples, 1) end
+                    break
+                end
             end
         end
 
@@ -2695,14 +2715,25 @@ function UI.Create(opts)
                     getgenv()._CDMUITabDragBlock = os.clock() + 0.12
 
                     -- 用最近采样估算速度，按力度映射滑行距离
-                    if #samples >= 2 then
+                    --   关键：先看「最后一次移动距现在多久」
+                    --   用户拖完停住再松手时，samples 里的旧数据会让速度虚高，
+                    --   表现为「明明停住了还是滑一下」。停手超过 90ms 直接算静止。
+                    local nowT = os.clock()
+                    local lastSample = samples[#samples]
+                    local idle = lastSample and (nowT - lastSample.t) or 999
+
+                    if idle < 0.09 and #samples >= 2 then
                         local first, last = samples[1], samples[#samples]
                         local dt = last.t - first.t
                         if dt > 0.001 then
                             local raw = ((last.p - first.p) / dt) / 60
                             inertiaVel, inertiaFriction = applyForce(raw)
                         end
+                    else
+                        -- 停住了：清掉速度，不触发惯性
+                        inertiaVel, inertiaFriction = 0, 0
                     end
+
                     if math.abs(inertiaVel) >= 0.12 then
                         startInertia()
                     end
