@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.3.2                                                 ║
+    ║  CDMUI 2.3.3                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.3.2  行文字右侧预留 122px，不再被按钮遮挡
+-- CDMUI v2.3.3  修复首次加载时行悬停高亮残留
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.3.2"
+UI.Version = "2.3.3"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -1377,11 +1377,23 @@ local function refreshHover(root)
     local function check(d)
         if d:GetAttribute("__hoverEnter") == nil then return end
         local p2, s2 = d.AbsolutePosition, d.AbsoluteSize
-        -- 快速排除：完全在视口外的不算
-        if s2.X <= 0 or s2.Y <= 0 then return end
+        local wasIn = d:GetAttribute("__hoverActive") == true
+
+        -- 不可见 / 尺寸为 0（比如别的 Tab 的行）：
+        --   直接清掉悬停态，不要留着旧值。
+        --   否则切回来时会被当成「一直在里面」，导致一片行同时高亮。
+        if s2.X <= 0 or s2.Y <= 0 or d.Visible == false then
+            if wasIn then
+                d:SetAttribute("__hoverActive", false)
+                local fns0 = _G.__CDMUIHoverFns and _G.__CDMUIHoverFns[d]
+                local f0 = fns0 and fns0.leave
+                if type(f0) == "function" then pcall(f0) end
+            end
+            return
+        end
+
         local inside = loc.X >= p2.X and loc.X <= p2.X + s2.X
                    and loc.Y >= p2.Y and loc.Y <= p2.Y + s2.Y
-        local wasIn = d:GetAttribute("__hoverActive") == true
         if inside == wasIn then return end
 
         d:SetAttribute("__hoverActive", inside)
@@ -3507,12 +3519,63 @@ function Window:_PlayIntro()
                             pcall(function() rows[i]:SetAttribute("__introBusy", false) end)
                         end
                     end
+
+                    -- 入场结束后强制清掉所有行的悬停态
+                    --   Bug：入场期间鼠标扫过某些行，MouseEnter 被 __introBusy 拦了，
+                    --   但 __hoverActive 没同步。动画一结束，refreshHover 发现
+                    --   inside=true / wasIn=false，就当成刚进入，于是一大片行同时高亮。
+                    --   这里把状态和颜色一起复位，鼠标再动会自然重算。
+                    self:_ResetAllRowHover()
+
                     self._introPlaying = false
                 end)
             end)
 
         end)
     end)
+end
+
+-- 重置所有行的悬停状态
+--   把 __hoverActive 清成 false，并把底色复位到常态
+--   用于入场动画结束、切页完成等场景，避免「一片行同时高亮」
+function Window:_ResetAllRowHover()
+    local list = self.List
+    if not list then return end
+
+    local function resetRow(row)
+        if not row or not row.Parent then return end
+        pcall(function() row:SetAttribute("__hoverActive", false) end)
+        -- 只复位登记过悬停的行，避免误改别的控件
+        if row:GetAttribute("__hoverEnter") == nil then return end
+        -- 直接落终态，不播动画（否则入场刚结束会看到一片行在褪色）
+        pcall(function()
+            row.BackgroundColor3 = T.row
+            row.BackgroundTransparency = 0.15
+        end)
+    end
+
+    for _, child in ipairs(list:GetChildren()) do
+        resetRow(child)
+    end
+
+    -- Tab 按钮也要复位
+    local bar = self.TabBar
+    if bar then
+        for _, btn in ipairs(bar:GetChildren()) do
+            if btn:IsA("TextButton") then
+                pcall(function() btn:SetAttribute("__hoverActive", false) end)
+                if btn:GetAttribute("__hoverEnter") ~= nil then
+                    local idx = btn.LayoutOrder
+                    -- 当前 Tab 保持激活色，其余回到常态
+                    if idx ~= self.TabIndex then
+                        pcall(function()
+                            btn.BackgroundColor3 = T.tabIdle
+                        end)
+                    end
+                end
+            end
+        end
+    end
 end
 
 function Window:_ContentParts()
@@ -4653,6 +4716,12 @@ function Window:SelectTab(index, instant)
         else
             self.List.CanvasPosition = Vector2.new(0, 0)
         end
+        -- 切页后清掉悬停残留（和入场动画结束时同样处理）
+        task.defer(function()
+            if not self.Destroyed then
+                pcall(function() self:_ResetAllRowHover() end)
+            end
+        end)
         return
     end
 
@@ -4693,6 +4762,8 @@ function Window:SelectTab(index, instant)
         -- ③ 收起过半就开始展开，收尾和起头叠在一起
         task.delay(collapseTotal * 0.55, function()
             if self.Destroyed or self.TabIndex ~= index then return end
+            -- 切页开始时先清一次悬停残留，避免旧页的行带着高亮消失
+            pcall(function() self:_ResetAllRowHover() end)
 
             -- 旧页彻底归零并隐藏
             setPage(oldTab, false)
@@ -5281,6 +5352,9 @@ local function baseRow(tab, height)
     -- 登记到悬停刷新系统（滚动时鼠标不动也能正确高亮）
     --   注意：SetAttribute 不支持函数，回调存到弱表里
     row:SetAttribute("__hoverEnter", not IS_MOBILE)
+    -- 明确初始状态：不然 nil 和 false 混用，refreshHover 的
+    -- wasIn 判断会漏掉第一次「进入」的转换
+    row:SetAttribute("__hoverActive", false)
     _G.__CDMUIHoverFns = _G.__CDMUIHoverFns or setmetatable({}, { __mode = "k" })
     _G.__CDMUIHoverFns[row] = { enter = onEnter, leave = onLeave }
 
