@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.4.0                                                 ║
+    ║  CDMUI 2.4.1                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.4.0  重写 SelectTab：去掉高度动画，彻底消除快速切页错乱
+-- CDMUI v2.4.1  恢复切页高度动画（逐帧手写 + token 取消）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.4.0"
+UI.Version = "2.4.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2990,6 +2990,26 @@ function UI.Create(opts)
         pcall(createTopbarButton, self, self._topbarText)
     end
 
+    -- 初始化所有行的原始高度
+    --   切页动画依赖 __baseH 来恢复高度，必须在第一次切页前记录好
+    --   （各行类型创建路径不同，统一在这里扫一遍最可靠）
+    task.defer(function()
+        if self.Destroyed then return end
+        for _, tt in ipairs(self.Tabs) do
+            for _, w in ipairs(tt.Widgets) do
+                if w and w.Parent then
+                    local b = w:GetAttribute("__baseH")
+                    if not b or b <= 0 then
+                        local cur = w.Size.Y.Offset
+                        if cur > 0 then
+                            w:SetAttribute("__baseH", cur)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
     -- 加载任务（可选）
     --   RealLoading = true 且传了 Tasks 才跑真实任务
     --   默认 false：用纯装饰动画，不执行任何真实工作
@@ -4662,8 +4682,7 @@ function Window:SelectTab(index, instant)
     if not tab then return end
     local last = self.TabIndex
 
-    -- 切页 token：每次切页自增，旧回调看到 token 变了就立刻放弃
-    --   这是唯一可靠的取消机制（Anim.cancel + 代数校验都不够稳）
+    -- 切页 token：每次切页自增，旧动画看到 token 变了立刻放弃
     self._tabToken = (self._tabToken or 0) + 1
     local token = self._tabToken
 
@@ -4686,52 +4705,30 @@ function Window:SelectTab(index, instant)
         end)
     end
 
-    -- ============================================================
-    -- 核心：把所有行设到确定状态
-    --   不做高度动画。原因：
-    --     · 高度动画会被 UIListLayout 重算打断，出现重叠
-    --     · 快速切页时多个动画抢同一属性，必然错乱
-    --   改用「立即落终态 + 只对透明度做动画」，
-    --   视觉上是淡入淡出，但布局永远正确。
-    -- ============================================================
-    local function applyTab(tt, visible)
-        for _, w in ipairs(tt.Widgets) do
-            if w and w.Parent then
-                if w.Name == "ChildRow" or w.Name == "BodyChildRow" then
-                    -- 子行由 ExpandRestorers 处理
-                elseif w.Name == "SectionRow" then
-                    -- Section 是全透明标题，只控制显隐
-                    w.Visible = visible
-                else
-                    local base = w:GetAttribute("__baseH")
-                    if not base or base <= 0 then
-                        base = w.Size.Y.Offset
-                        if base > 0 then w:SetAttribute("__baseH", base) end
-                    end
-                    w.Visible = visible
-                    -- 高度直接落终态，永不做动画
-                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0,
-                        visible and (base or 0) or 0)
-                end
-            end
+    -- 记录行原始高度
+    local function baseH(w)
+        local b = w:GetAttribute("__baseH")
+        if not b or b <= 0 then
+            b = w.Size.Y.Offset
+            if b > 0 then w:SetAttribute("__baseH", b) end
         end
-        -- 子行按展开状态恢复
-        for _, r in ipairs(self.ExpandRestorers) do
-            if r.tab == tt and r.apply then
-                pcall(r.apply, visible and r.get() == true or false, false)
-            end
-        end
+        return b or 0
     end
 
-    -- 所有非当前页：立即隐藏（保证布局干净）
+    -- 立即把非当前页全部清空（保证布局干净，不留残留）
     for i, tt in ipairs(self.Tabs) do
         if i ~= index then
-            applyTab(tt, false)
+            for _, w in ipairs(tt.Widgets) do
+                if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                    w.Visible = false
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
+                end
+            end
+            for _, r in ipairs(self.ExpandRestorers) do
+                if r.tab == tt and r.apply then pcall(r.apply, false, false) end
+            end
         end
     end
-
-    -- 当前页：显示
-    applyTab(tab, true)
 
     -- 滚动位置
     if last == index and not instant then
@@ -4740,29 +4737,98 @@ function Window:SelectTab(index, instant)
         self.List.CanvasPosition = Vector2.new(0, 0)
     end
 
-    -- 悬停状态清理
+    -- 悬停清理
     task.defer(function()
         if not self.Destroyed then
             pcall(function() self:_ResetAllRowHover() end)
         end
     end)
 
-    -- 淡入动画：只改透明度，不改尺寸
-    --   这样布局绝对正确，视觉上也有过渡
-    if not instant then
-        local delay = 0
-        for _, w in ipairs(tab.Widgets) do
-            if w and w.Parent and w.Name == "Row" then
-                local origT = w:GetAttribute("__origBgTrans")
-                if origT == nil then origT = 0.15 end
-                w.BackgroundTransparency = 1
-                Anim.to(w, { BackgroundTransparency = origT }, 0.22,
-                    Enum.EasingStyle.Quad, Enum.EasingDirection.Out, delay)
-                delay = delay + 0.006
-                if delay > 0.12 then delay = 0.12 end
+    -- ============================================================
+    -- 当前页：显示 + 高度动画
+    --   动画用「逐帧手动写」而不是 TweenService：
+    --     · token 变化时能立刻停手（TweenService 停不干净）
+    --     · 每帧只写一次，不会和 UIListLayout 打架
+    -- ============================================================
+    local rows = {}
+    for _, w in ipairs(tab.Widgets) do
+        if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+            local b = baseH(w)
+            w.Visible = true
+            if b > 0 then
+                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
+                rows[#rows + 1] = { obj = w, base = b }
             end
         end
     end
+
+    -- 子行按展开状态恢复
+    for _, r in ipairs(self.ExpandRestorers) do
+        if r.tab == tab and r.apply then
+            pcall(r.apply, r.get() == true, false)
+        end
+    end
+
+    if instant or #rows == 0 then
+        for _, it in ipairs(rows) do
+            it.obj.Size = UDim2.new(it.obj.Size.X.Scale, it.obj.Size.X.Offset, 0, it.base)
+        end
+        return
+    end
+
+    -- 逐帧展开：总时长 0.30s，每行错开 0.006s
+    local DUR = 0.30
+    local STAGGER = 0.006
+    local t0 = os.clock()
+
+    task.spawn(function()
+        while true do
+            -- token 变了 / 面板没了 → 立刻放弃，不写任何属性
+            if self.Destroyed or self._tabToken ~= token then return end
+
+            local elapsed = os.clock() - t0
+            local allDone = true
+
+            for i, it in ipairs(rows) do
+                local startAt = (i - 1) * STAGGER
+                local localT = (elapsed - startAt) / DUR
+                if localT < 0 then
+                    allDone = false
+                elseif localT < 1 then
+                    allDone = false
+                    -- Quart Out：起步快末尾缓，收得干净
+                    local p = 1 - (1 - localT) ^ 3
+                    local h = it.base * p
+                    if it.obj and it.obj.Parent then
+                        it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
+                            it.obj.Size.X.Offset, 0, h)
+                    end
+                else
+                    -- 已完成：确保落到精确终态
+                    if it.obj and it.obj.Parent then
+                        local cur = it.obj.Size.Y.Offset
+                        if math.abs(cur - it.base) > 0.5 then
+                            it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
+                                it.obj.Size.X.Offset, 0, it.base)
+                        end
+                    end
+                end
+            end
+
+            if allDone then
+                -- 最后再钉一次终态，防止浮点误差
+                for _, it in ipairs(rows) do
+                    if it.obj and it.obj.Parent then
+                        it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
+                            it.obj.Size.X.Offset, 0, it.base)
+                    end
+                end
+                return
+            end
+
+            RunService.RenderStepped:Wait()
+        end
+    end)
 end
 
 function Window:Notify(text, duration)
@@ -5297,6 +5363,9 @@ local function baseRow(tab, height)
     row:SetAttribute("__hoverActive", false)
     -- 记录原始背景透明度，切页动画要用（别写死 0.15）
     row:SetAttribute("__origBgTrans", row.BackgroundTransparency)
+    -- 记录原始高度：切页时要靠它恢复
+    --   必须在创建时就记，否则被切走设成 0 后就没基准了
+    row:SetAttribute("__baseH", row.Size.Y.Offset)
     _G.__CDMUIHoverFns = _G.__CDMUIHoverFns or setmetatable({}, { __mode = "k" })
     _G.__CDMUIHoverFns[row] = { enter = onEnter, leave = onLeave }
 
@@ -7311,6 +7380,8 @@ function Tab:Section(cfg)
     table.insert(self.Widgets, row)
     -- 记录原始透明度（Section 是全透明 1）
     row:SetAttribute("__origBgTrans", row.BackgroundTransparency)
+    -- 记录原始高度
+    row:SetAttribute("__baseH", row.Size.Y.Offset)
 
     mk("TextLabel", {
         Name = "SectionTitle",
