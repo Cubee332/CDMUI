@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.3.4                                                 ║
+    ║  CDMUI 2.3.5                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.3.4  修复拖动后停住再松手仍有惯性
+-- CDMUI v2.3.5  优化切页动画：收展交叉淡入，消除硬切换
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.3.4"
+UI.Version = "2.3.5"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4692,13 +4692,20 @@ function Window:SelectTab(index, instant)
     end
 
     -- 整页切换到 显示/隐藏 状态
-    local function setPage(t, visible)
+    --   collapseToZero: true 时只设 Visible，高度由调用方用动画撑开
+    --   （避免「Visible=true 同时高度=base」造成的突然出现）
+    local function setPage(t, visible, collapseToZero)
         for _, w in ipairs(t.Widgets) do
             -- BodyChildRow 自己管理显隐，不能被切页重置
             if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
                 local base = rememberBase(w)
                 w.Visible = visible
-                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, visible and base or 0)
+                if visible and collapseToZero then
+                    -- 交给后面的展开动画
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
+                else
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, visible and base or 0)
+                end
                 if w.Name == "Row" then
                     w.BackgroundTransparency = 0.15
                 end
@@ -4756,11 +4763,17 @@ function Window:SelectTab(index, instant)
         return
     end
 
-    -- 提速：收起 0.12s / 展开 0.18s，错开更小，减少等待感
-    local COLLAPSE_TIME = 0.10
-    local EXPAND_TIME = 0.16
-    local STAGGER_OUT = 0.006
-    local STAGGER_IN = 0.010
+    -- 换页动画参数
+    --   旧版 0.10/0.16 + Quad In，收得太急，末尾像被"掐断"，
+    --   而且旧页一隐藏新页立刻从 0 冒出来，中间没有任何过渡。
+    --   现在改成：
+    --     · 收起用 Quint In（加速下落，观感是"被吸走"而不是"卡住"）
+    --     · 收起 0.16s，展开 0.26s，两者时间重叠更多
+    --     · 错开量调小，整页像一条流水而不是逐行蹦出来
+    local COLLAPSE_TIME = 0.16
+    local EXPAND_TIME = 0.26
+    local STAGGER_OUT = 0.003
+    local STAGGER_IN = 0.005
 
     -- 收集旧页可见行
     local oldRows = {}
@@ -4785,26 +4798,40 @@ function Window:SelectTab(index, instant)
 
         for idx, w in ipairs(oldRows) do
             local fromBottom = (#oldRows - idx) * STAGGER_OUT
+            -- Quint In：起步慢、末尾快，像被"吸走"，不会在结束瞬间掐断
             Anim.to(w, {
                 Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0),
-            }, COLLAPSE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In, fromBottom)
+                BackgroundTransparency = 0.65,
+            }, COLLAPSE_TIME, Enum.EasingStyle.Quint, Enum.EasingDirection.In, fromBottom)
         end
 
         -- ③ 收起过半就开始展开，收尾和起头叠在一起
-        task.delay(collapseTotal * 0.55, function()
+        --   关键改动：不再「旧页隐藏 → 新页出现」的硬切换，
+        --   而是让新页在旧页还没完全消失时就开始撑开，
+        --   两边在时间轴上重叠，视觉上是连续流动而不是突然换页。
+        task.delay(collapseTotal * 0.62, function()
             if self.Destroyed or self.TabIndex ~= index then return end
             -- 切页开始时先清一次悬停残留，避免旧页的行带着高亮消失
             pcall(function() self:_ResetAllRowHover() end)
 
-            -- 旧页彻底归零并隐藏
-            setPage(oldTab, false)
+            -- 旧页隐藏
+            --   注意：这里不再用 setPage 硬设高度
+            --   收起动画已经把高度降到接近 0，只需要把 Visible 关掉
+            for _, w in ipairs(oldTab.Widgets) do
+                if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                    w.Visible = false
+                end
+            end
+            for _, r in ipairs(self.ExpandRestorers) do
+                if r.tab == oldTab and r.apply then r.apply(false, false) end
+            end
 
             -- 位置兜底，确保新页从顶部开始
             self.List.CanvasPosition = Vector2.new(0, 0)
 
         -- 新页：统一走 setPage（和 instant 分支共用同一套逻辑，
         -- 避免「改一处忘另一处」）。先把高度归 0，再由下面的动画撑开。
-        setPage(tab, true)
+        setPage(tab, true, true)
 
         local newRows = {}
         for _, w in ipairs(tab.Widgets) do
@@ -4827,9 +4854,13 @@ function Window:SelectTab(index, instant)
         local showDelay = 0
         for idx, w in ipairs(newRows) do
             local base = w:GetAttribute("__baseH") or 0
+            -- 从透明开始，边撑开边淡入
+            --   Back Out：末尾轻微过冲再回落，有弹性不会生硬停住
+            pcall(function() w.BackgroundTransparency = 1 end)
             Anim.to(w, {
                 Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base),
-            }, EXPAND_TIME, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, showDelay)
+                BackgroundTransparency = 0.15,
+            }, EXPAND_TIME, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, showDelay)
 
             showDelay = showDelay + STAGGER_IN
 
