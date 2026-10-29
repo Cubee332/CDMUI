@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.6                                                 ║
+    ║  CDMUI 2.6.7                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.6  优化主面板入场/出场动画，淡入淡出更自然
+-- CDMUI v2.6.7  加载动画与主面板交叉淡入，修复标题变白
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.6"
+UI.Version = "2.6.7"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -3126,11 +3126,14 @@ function Window:_PlayIntro()
     }, track)
     corner(fill, 2)
 
-    -- 淡入
-    Anim.to(splash, { BackgroundTransparency = 0.05 }, 0.22,
-        Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    Anim.to(st, { Transparency = 0.4 }, 0.22)
-    Anim.to(splashScale, { Scale = 1 }, 0.30,
+    -- 淡入：从完全透明 + 略小开始，平滑浮现
+    splash.Position = UDim2.new(0.5, 0, 0.5, 6)
+    Anim.to(splash, {
+        BackgroundTransparency = 0.05,
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+    }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+    Anim.to(st, { Transparency = 0.4 }, 0.30)
+    Anim.to(splashScale, { Scale = 1 }, 0.42,
         Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
     -- ===== 进度推进 =====
@@ -3214,18 +3217,42 @@ function Window:_PlayIntro()
     task.delay(acc + 0.30, function()
         if not splash.Parent then return end
 
-        -- 淡出 splash
-        Anim.to(splash, { BackgroundTransparency = 1 }, 0.20,
-            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-        Anim.to(st, { Transparency = 1 }, 0.20)
-        if title then Anim.to(title, { TextTransparency = 1 }, 0.16) end
-        if status then Anim.to(status, { TextTransparency = 1 }, 0.16) end
-        Anim.to(track, { BackgroundTransparency = 1 }, 0.16)
-        Anim.to(fill, { BackgroundTransparency = 1 }, 0.16)
-        Anim.to(splashScale, { Scale = 0.94 }, 0.20,
+        -- ============================================================
+        -- 淡出 splash：和主面板入场交叉进行
+        --   之前是 splash 完全消失后才显示面板，中间有一帧"空场"，
+        --   看起来像"啪"一下切过去。现在让两者重叠：
+        --     t=0      splash 开始淡出，主面板同时开始入场
+        --     t=0.18   splash 几乎不可见
+        --     t=0.30   splash 销毁（此时面板已经浮现）
+        -- ============================================================
+        -- 主面板：提前显示，与 splash 交叉淡入
+        panel.Visible = true
+        self:_UnlockMouse()
+        panel.Position = UDim2.new(0.5, 0, 0.5, 12)
+        panel.BackgroundTransparency = 0.75
+        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.92 end
+
+        Anim.to(panel, {
+            Position = UDim2.new(0.5, 0, 0.5, 10),
+            BackgroundTransparency = BASE_TRANS,
+        }, 0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        if self.Scale then
+            Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.40,
+                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end
+
+        -- splash 淡出（比面板入场稍快，形成"旧的退去、新的浮现"）
+        Anim.to(splash, { BackgroundTransparency = 1 }, 0.24,
+            Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        Anim.to(st, { Transparency = 1 }, 0.24)
+        if title then Anim.to(title, { TextTransparency = 1 }, 0.18) end
+        if status then Anim.to(status, { TextTransparency = 1 }, 0.18) end
+        Anim.to(track, { BackgroundTransparency = 1 }, 0.18)
+        Anim.to(fill, { BackgroundTransparency = 1 }, 0.18)
+        Anim.to(splashScale, { Scale = 0.96 }, 0.26,
             Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
-        task.delay(0.22, function()
+        task.delay(0.28, function()
             -- 已经被新的运行取代，收干净走人
             if UI.IsStale() or self.Destroyed then
                 if splash.Parent then splash:Destroy() end
@@ -3233,10 +3260,7 @@ function Window:_PlayIntro()
             end
             if splash.Parent then splash:Destroy() end
 
-            -- 显示主面板并播放入场
-            panel.Visible = true
-            self:_UnlockMouse()
-
+            -- 面板已经在交叉淡入阶段显示并开始动画了，这里只做收尾
             -- 加载动画到这里算放完了，这时才挂顶栏按钮
             if self._topbarPending then
                 self._topbarPending = false
@@ -3252,10 +3276,8 @@ function Window:_PlayIntro()
                     self.Busy = false
                 end
             end)
-            -- 不要设 0（否则面板完全不可见，且难以恢复）
-            if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.9 end
-            panel.BackgroundTransparency = 1
 
+            -- 内容依次上浮淡入（和面板交叉淡入配合）
             for _, w in ipairs(self:_ContentParts()) do
                 if not w:GetAttribute("__basePos") then
                     w:SetAttribute("__basePos", w.Position)
@@ -4292,12 +4314,12 @@ function Window:SetVisible(visible, instant)
 
     local BASE_TRANS = 0.05
 
-    -- 面板里的内容行（标题 + Tab 栏 + 滚动区）
-    --   注意 self.Title 是字符串，实际的标题控件要按名字找
+    -- 面板里的内容行（Tab 栏 + 滚动区）
+    --   注意：不要包含 BigTitle
+    --   标题是全透明的纯文字，参与淡出动画会把它的
+    --   BackgroundTransparency 改成半透明，恢复时又变成实心灰底
     local function contentParts()
         local parts = {}
-        local titleLbl = self.Panel and self.Panel:FindFirstChild("BigTitle")
-        if titleLbl then table.insert(parts, titleLbl) end
         if self.TabBar then table.insert(parts, self.TabBar) end
         if self.List then table.insert(parts, self.List) end
         return parts
@@ -4491,13 +4513,15 @@ function Window:SetVisible(visible, instant)
                         pcall(function() self:_ShowButtonGuide() end)
                     end)
                 end
+                -- 复位所有出场动画改过的属性，否则下次打开会从中间态开始
                 self.Panel.Position = UDim2.new(0.5, 0, 0.5, 10)
                 self.Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+                self.Panel.BackgroundTransparency = BASE_TRANS
                 if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
                 for _, w in ipairs(contentParts()) do
                     local base = w:GetAttribute("__basePos")
                     if base then w.Position = base end
-                    w.BackgroundTransparency = 0
+                    w.BackgroundTransparency = w:GetAttribute("__baseTrans") or 0
                 end
             end
         end)
