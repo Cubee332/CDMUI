@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.7.0                                                 ║
+    ║  CDMUI 2.8.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -40,8 +40,9 @@
     │  2. UI.Create 参数                                            │
     └──────────────────────────────────────────────────────────────┘
 
-        Title            面板标题（默认 "控制面板"）
-        TopbarText       顶栏按钮文字（默认 "菜单"）
+        Title            面板内的大标题 = 针对的游戏名字
+                         例：考试脚本写 "试炼"，SOD 脚本写 "偷窃或死亡"
+        TopbarText       左上角顶栏按钮文字，固定写 "控制面板"
         AutoOpen         创建后是否自动显示（默认 true）
         AutoUnlockMouse  面板打开时是否解锁鼠标（默认 true）
         TopbarButton     是否生成左上角顶栏按钮（默认 true）
@@ -263,7 +264,7 @@
 
 
 
--- CDMUI v2.7.0  无 TopbarStandard 时自建顶栏系统
+-- CDMUI v2.8.0  顶栏与主UI同步创建 + 入场出场动画 + 指引定位修复
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +277,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.7.0"
+UI.Version = "2.8.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2044,27 +2045,212 @@ local function createTopbarButton(self, labelText)
         --     · 悬停变亮
         --     · 支持后续往里面追加更多按钮（通过 CDMUI.AddTopbarButton）
         -- ============================================================
+        -- ============================================================
+        -- 自建顶栏（游戏没有 TopbarStandard 时使用）
+        --   参数 100% 复制原生顶栏那套，保证观感一致：
+        --     widget   90 x 44，透明
+        --     bg       GAME_BTN_BG / GAME_BTN_TRANS，圆角 999
+        --     iconSpot 1,-8 x 1,-8 居中，RGB(225,225,230)，常态透明
+        --     hover    纯白 0.85，常态隐藏
+        --     文字     16px GothamMedium，纯白居中
+        --     click    全屏透明，圆角 999
+        --   三态：常态透明 / 悬浮淡白(0.82) / 激活亮白(0.70)+外圈
+        -- ============================================================
         local function makeFloatButton()
             local oldGui = playerGui:FindFirstChild("CDMUIWidget")
             if oldGui then pcall(function() oldGui:Destroy() end) end
 
+            -- ============================================================
+            -- 位置策略（参考考试游戏的 Examination 做法）
+            --   考试游戏：按钮挂在 TopbarStandard.Holders.Left 里，
+            --   由 Roblox 的 UIListLayout 自动排版 → 位置永远正确。
+            --
+            --   没有 TopbarStandard 的游戏：
+            --     扫描 CoreGui / PlayerGui 里所有顶栏类 GuiObject，
+            --     读取原生按钮的 Y 坐标和最右边界，直接复用。
+            -- ============================================================
+            local function probeNativeBar()
+                -- ============================================================
+                -- 探测 Roblox 原生顶栏按钮的坐标
+                --
+                -- 实测结构（2024+ 新版 TopBar）：
+                --   CoreGui.TopBarApp (Folder)
+                --     └─ TopBarApp (ScreenGui)
+                --         ├─ MenuIconHolder  (16, -48) 1920x48
+                --         │    └─ TriggerPoint (16, -48) 44x48
+                --         ├─ UnibarLeftFrame (-16, -48) 1920x48
+                --         │    ├─ UnibarMenu      (68, -46)  96x148
+                --         │    ├─ StackedElements (156, -46) 1836x44  ← 按钮组
+                --         │    └─ HealthBar       (1779, -46) 125x44
+                --         └─ TopBarFrame (0, -48) 1920x48
+                --              └─ LeftFrame (16, -48) 944x48
+                --
+                -- 结论：所有顶栏按钮 Y = -46，按钮组从 X=156 开始
+                -- ============================================================
+                local bestY, bestRight = nil, nil
+
+                local topbarApp = game:GetService("CoreGui"):FindFirstChild("TopBarApp")
+                local gui = topbarApp and topbarApp:FindFirstChild("TopBarApp")
+
+                if gui then
+                    -- 优先：StackedElements（真正装按钮的容器）
+                    local unibar = gui:FindFirstChild("UnibarLeftFrame")
+                    if unibar then
+                        local stacked = unibar:FindFirstChild("StackedElements")
+                        if stacked then
+                            local ap, as = stacked.AbsolutePosition, stacked.AbsoluteSize
+                            bestY = ap.Y
+                            bestRight = ap.X
+                        end
+                        -- 兜底：用 UnibarMenu 的右边界
+                        if not bestY then
+                            local menu = unibar:FindFirstChild("UnibarMenu")
+                            if menu then
+                                local ap, as = menu.AbsolutePosition, menu.AbsoluteSize
+                                bestY = ap.Y
+                                bestRight = ap.X + as.X
+                            end
+                        end
+                    end
+                    -- 再兜底：MenuIconHolder
+                    if not bestY then
+                        local holder = gui:FindFirstChild("MenuIconHolder")
+                        if holder then
+                            local ap, as = holder.AbsolutePosition, holder.AbsoluteSize
+                            bestY = ap.Y
+                            bestRight = ap.X + as.X
+                        end
+                    end
+                end
+
+                -- 最后兜底：扫描 CoreGui 里所有 Y<60 的按钮
+                if not bestY then
+                    pcall(function()
+                        for _, g in ipairs(game:GetService("CoreGui"):GetChildren()) do
+                            if g:IsA("ScreenGui") then
+                                for _, d in ipairs(g:GetDescendants()) do
+                                    if d:IsA("GuiObject") and d.Visible then
+                                        local ap, as = d.AbsolutePosition, d.AbsoluteSize
+                                        if ap.Y >= -60 and ap.Y <= 0
+                                           and as.Y >= 25 and as.Y <= 60
+                                           and as.X >= 25 and as.X <= 200 then
+                                            if not bestY or ap.Y < bestY then bestY = ap.Y end
+                                            local right = ap.X + as.X
+                                            if not bestRight or right > bestRight then bestRight = right end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                end
+
+                return bestY, bestRight
+            end
+
+            local nativeY, nativeRight = probeNativeBar()
+
             local holder = mk("ScreenGui", {
                 Name = "CDMUIWidget",
                 ResetOnSpawn = false,
-                -- 关掉 IgnoreGuiInset：坐标从内容区左上角算，
-                --   这样 (12,8) 就是 Roblox 顶栏下方的可见区域
-                IgnoreGuiInset = false,
+                -- 和 Roblox TopbarStandard 保持一致（它也是 true）
+                IgnoreGuiInset = true,
                 DisplayOrder = 200,
                 ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
             }, playerGui)
 
-            -- 顶栏容器（横向排列，可扩展）
-            -- 位置：IgnoreGuiInset=true 时 (0,0) 是屏幕物理左上角，
-            --   要避开 Roblox 顶栏，往下偏 8px 并留出安全距离
+            -- ============================================================
+            -- 水平位置：原生按钮最右侧 + 12px
+            --   但要避开其他游戏自己的顶栏 UI（比如商店按钮、货币显示等）
+            --   检测方式：扫描目标 X 附近有没有其他游戏的按钮占位，
+            --   有就继续往右挪，直到找到空位。
+            -- ============================================================
+            local baseX = (nativeRight and (nativeRight + 12)) or 386
+            local posX = baseX
+
+            -- 冲突检测：在顶栏区域找所有 GuiObject，看 posX~posX+90 是否被占
+            local function findFreeX(startX)
+                local BAR_Y = nativeY or -46
+                local BAR_H = 44
+                local occupied = {}
+                local vpW = workspace.CurrentCamera.ViewportSize.X
+
+                local function scan(root)
+                    if not root then return end
+                    for _, d in ipairs(root:GetDescendants()) do
+                        if d:IsA("GuiObject") and d.Visible then
+                            local ap, as = d.AbsolutePosition, d.AbsoluteSize
+                            -- 只看顶栏垂直范围内的
+                            if ap.Y < BAR_Y + BAR_H + 8 and ap.Y + as.Y > BAR_Y - 8 then
+                                -- 过滤：
+                                --   · 太小的（装饰点）
+                                --   · 全屏/超宽的容器（不是真正的按钮）
+                                --   · 完全透明的
+                                local isFullscreen = (as.X >= vpW * 0.8) or (as.Y >= 200)
+                                local tooSmall = (as.X <= 8 or as.Y <= 8)
+                                local invisible = (d:IsA("Frame") or d:IsA("TextButton"))
+                                    and d.BackgroundTransparency >= 0.95
+                                    and not d:IsA("TextButton")
+                                if not isFullscreen and not tooSmall and not invisible then
+                                    occupied[#occupied + 1] = { x1 = ap.X, x2 = ap.X + as.X }
+                                end
+                            end
+                        end
+                    end
+                end
+                -- 扫游戏自己的 PlayerGui
+                for _, g in ipairs(playerGui:GetChildren()) do
+                    if g:IsA("ScreenGui") and g.Enabled then
+                        scan(g)
+                    end
+                end
+
+                -- 从 startX 开始，找第一个不冲突的位置
+                local x = startX
+                for _ = 1, 20 do
+                    local conflict = false
+                    for _, seg in ipairs(occupied) do
+                        -- 我们的占位 [x, x+90]，和 seg 重叠？
+                        if not (x + 90 < seg.x1 or x > seg.x2) then
+                            conflict = true
+                            x = seg.x2 + 12
+                            break
+                        end
+                    end
+                    if not conflict then
+                        -- 不能超出屏幕
+                        if x + 90 > vpW - 12 then
+                            x = vpW - 90 - 12
+                        end
+                        return x
+                    end
+                end
+                return math.min(x, vpW - 90 - 12)
+            end
+
+            posX = findFreeX(baseX)
+            print(string.format("[CDMUI] 顶栏位置: base=%d → 最终=%d", baseX, posX))
+            -- 垂直居中对齐原生按钮（我们 44 高，原生约 34 高）
+            -- ============================================================
+            -- 垂直位置
+            --   探测到的 nativeY 是原生按钮的 AbsolutePosition（如 -46）
+            --   但我们的 ScreenGui 是 IgnoreGuiInset = true，
+            --   写进 Position 的 Y 会被再减一次 GuiInset（58），
+            --   所以要加回 GuiInset 抵消。
+            --   公式：Position.Y = nativeY + GuiInset.Y
+            --   例：-46 + 58 = 12 → 渲染后 AbsolutePosition.Y = 12 - 58 = -46 ✓
+            -- ============================================================
+            local insetY = 58
+            pcall(function()
+                local ok, ins = pcall(function() return game:GetService("GuiService"):GetGuiInset() end)
+                if ok and ins then insetY = ins.Y end
+            end)
+            local posY = (nativeY or -46) + insetY
+
             local bar = mk("Frame", {
                 Name = "TopbarBar",
-                Size = UDim2.fromOffset(90, 34),
-                Position = UDim2.fromOffset(12, 8),
+                Size = UDim2.fromOffset(90, 44),
+                Position = UDim2.fromOffset(posX, posY),
                 BackgroundTransparency = 1,
                 BorderSizePixel = 0,
                 ZIndex = 2,
@@ -2076,49 +2262,190 @@ local function createTopbarButton(self, labelText)
                 VerticalAlignment = Enum.VerticalAlignment.Center,
             }, bar)
 
-            -- 主按钮
-            local btn = mk("TextButton", {
-                Name = "MainBtn",
-                Size = UDim2.fromOffset(72, 32),
-                BackgroundColor3 = Color3.fromRGB(22, 22, 28),
-                BackgroundTransparency = 0.1,
-                BorderSizePixel = 0,
-                Text = labelText or "菜单",
-                TextColor3 = Color3.fromRGB(232, 232, 240),
-                Font = FONT_BOLD,
-                TextSize = 14,
-                AutoButtonColor = false,
-                LayoutOrder = 1,
-                ZIndex = 3,
-            }, bar)
-            corner(btn, 8)
-            local st2 = stroke(btn, Color3.fromRGB(70, 70, 85), 1, 0.35)
+            holder:SetAttribute("__probeY", posY)
+            holder:SetAttribute("__probeX", posX)
 
-            local hovering = false
-            local function refresh()
-                Anim.to(btn, {
-                    BackgroundColor3 = hovering and Color3.fromRGB(42, 42, 52)
-                        or Color3.fromRGB(22, 22, 28),
-                }, 0.12)
+
+            -- 单个按钮：参数和原生完全一致
+            local function makeBtn(parent, text, order, onClick)
+                local w = mk("Frame", {
+                    Name = "BtnWidget_" .. tostring(order),
+                    Size = UDim2.fromOffset(90, 44),
+                    BackgroundTransparency = 1,
+                    BorderSizePixel = 0,
+                    LayoutOrder = order,
+                    ZIndex = 3,
+                }, parent)
+
+                local bg = mk("Frame", {
+                    Name = "IconButton",
+                    Size = UDim2.new(1, 0, 1, 0),
+                    BackgroundColor3 = GAME_BTN_BG,
+                    BackgroundTransparency = GAME_BTN_TRANS,
+                    BorderSizePixel = 0,
+                    ZIndex = 2,
+                }, w)
+                corner(bg, 999)
+
+                local iconSpot = mk("Frame", {
+                    Name = "IconSpot",
+                    Size = UDim2.new(1, -8, 1, -8),
+                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                    AnchorPoint = Vector2.new(0.5, 0.5),
+                    BackgroundColor3 = Color3.fromRGB(225, 225, 230),
+                    BackgroundTransparency = 1,
+                    BorderSizePixel = 0,
+                    ZIndex = 4,
+                }, bg)
+                corner(iconSpot, 999)
+
+                local hoverOv = mk("Frame", {
+                    Name = "IconOverlay",
+                    Size = UDim2.new(1, 0, 1, 0),
+                    BackgroundColor3 = Color3.new(1, 1, 1),
+                    BackgroundTransparency = 0.85,
+                    BorderSizePixel = 0,
+                    Visible = false,
+                    ZIndex = 5,
+                }, iconSpot)
+                corner(hoverOv, 999)
+
+                mk("TextLabel", {
+                    Name = "IconLabel",
+                    Size = UDim2.new(1, -8, 1, 0),
+                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                    AnchorPoint = Vector2.new(0.5, 0.5),
+                    BackgroundTransparency = 1,
+                    Text = text,
+                    TextColor3 = Color3.new(1, 1, 1),
+                    TextSize = 16,
+                    Font = Enum.Font.GothamMedium,
+                    TextWrapped = false,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    TextXAlignment = Enum.TextXAlignment.Center,
+                    TextYAlignment = Enum.TextYAlignment.Center,
+                    ZIndex = 10,
+                }, iconSpot)
+
+                local click = mk("TextButton", {
+                    Name = "ClickRegion",
+                    Size = UDim2.new(1, 0, 1, 0),
+                    BackgroundTransparency = 1,
+                    Text = "",
+                    AutoButtonColor = false,
+                    ZIndex = 20,
+                    Active = true,
+                }, iconSpot)
+                corner(click, 999)
+
+                local hovering, isActive = false, false
+                local function applyVisual()
+                    if isActive then
+                        iconSpot.BackgroundTransparency = 0.7
+                        hoverOv.Visible = true
+                    elseif hovering then
+                        iconSpot.BackgroundTransparency = 0.82
+                        hoverOv.Visible = false
+                    else
+                        iconSpot.BackgroundTransparency = 1
+                        hoverOv.Visible = false
+                    end
+                end
+                click.MouseEnter:Connect(function() hovering = true; applyVisual() end)
+                click.MouseLeave:Connect(function() hovering = false; applyVisual() end)
+
+                local lastClick = 0
+                click.Activated:Connect(function()
+                    local now = os.clock()
+                    if now - lastClick < 0.3 then return end
+                    lastClick = now
+                    playClick()
+                    if type(onClick) == "function" then pcall(onClick) end
+                end)
+
+                -- ============================================================
+                -- 入场 / 出场动画
+                --   用 UIScale 做缩放（不影响布局），配合透明度
+                --   入场：0.3 缩放到 1，Back Out 有轻微弹跳
+                --   出场：1 缩放到 0.3，Quad In 快速消失
+                -- ============================================================
+                local scale = mk("UIScale", { Scale = 0.3 }, w)
+                w.BackgroundTransparency = 1
+
+                -- 内部所有元素从透明开始
+                for _, c in ipairs(w:GetDescendants()) do
+                    if c:IsA("TextLabel") then
+                        c.TextTransparency = 1
+                    elseif c:IsA("Frame") then
+                        if c.Name == "IconButton" then
+                            c.BackgroundTransparency = 1
+                        end
+                    end
+                end
+
+                -- 入场（延迟一点，等布局稳定）
+                task.delay(0.05, function()
+                    if not w or not w.Parent then return end
+                    Anim.to(scale, { Scale = 1 }, 0.42,
+                        Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                    -- 底色淡入
+                    local bgFrame = w:FindFirstChild("IconButton")
+                    if bgFrame then
+                        Anim.to(bgFrame, { BackgroundTransparency = GAME_BTN_TRANS }, 0.25,
+                            Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                    end
+                    -- 文字淡入
+                    for _, c in ipairs(w:GetDescendants()) do
+                        if c:IsA("TextLabel") then
+                            Anim.to(c, { TextTransparency = 0 }, 0.25,
+                                Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                        end
+                    end
+                end)
+
+                return {
+                    widget = w,
+                    scale = scale,
+                    setActive = function(on)
+                        isActive = on and true or false
+                        applyVisual()
+                    end,
+                    -- 出场动画（卸载时调用）
+                    playExit = function(onDone)
+                        if not w or not w.Parent then
+                            if onDone then onDone() end
+                            return
+                        end
+                        Anim.to(scale, { Scale = 0.3 }, 0.20,
+                            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                        local bgFrame = w:FindFirstChild("IconButton")
+                        if bgFrame then
+                            Anim.to(bgFrame, { BackgroundTransparency = 1 }, 0.18,
+                                Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                        end
+                        for _, c in ipairs(w:GetDescendants()) do
+                            if c:IsA("TextLabel") then
+                                Anim.to(c, { TextTransparency = 1 }, 0.18,
+                                    Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+                            end
+                        end
+                        task.delay(0.22, function()
+                            if onDone then onDone() end
+                        end)
+                    end,
+                }
             end
-            btn.MouseEnter:Connect(function() hovering = true; refresh() end)
-            btn.MouseLeave:Connect(function() hovering = false; refresh() end)
 
-            local lastClick = 0
-            btn.Activated:Connect(function()
-                local now = os.clock()
-                if now - lastClick < 0.3 then return end
-                lastClick = now
+            -- 主按钮
+            local mainBtn = makeBtn(bar, labelText or "菜单", 1, function()
                 if self.Busy then return end
-                playClick()
                 if self.Visible then self._closedByTopbar = true end
                 self:SetVisible(not self.Visible)
             end)
 
             -- 自适应宽度
             local function relayout()
-                local w = 0
-                local n = 0
+                local w, n = 0, 0
                 for _, c in ipairs(bar:GetChildren()) do
                     if c:IsA("GuiObject") then
                         w = w + c.Size.X.Offset
@@ -2126,13 +2453,24 @@ local function createTopbarButton(self, labelText)
                     end
                 end
                 w = w + math.max(0, n - 1) * 6
-                bar.Size = UDim2.fromOffset(math.max(72, w), 34)
+                bar.Size = UDim2.fromOffset(math.max(90, w), 44)
             end
             relayout()
 
             self.TopbarButton = holder
             self._topbarBar = bar
             self._topbarRelayout = relayout
+            self._topbarMainBtn = mainBtn
+            -- 指引要用「真正的按钮控件」定位
+            --   self.TopbarButton 是 ScreenGui（自建路径）或 Frame（原生路径），
+            --   拿它算 AbsolutePosition 会得到 (0,0)，指引就歪了。
+            self._topbarAnchor = mainBtn.widget
+            self.TopbarSetActive = function(on)
+                if mainBtn then mainBtn.setActive(on) end
+            end
+            self.TopbarResetHover = function()
+                -- 浮动按钮的 hover 由 MouseLeave 自动处理
+            end
 
             -- 导出：外部可以往自建顶栏追加按钮
             if not UI.AddTopbarButton then
@@ -2143,37 +2481,9 @@ local function createTopbarButton(self, labelText)
                     for _, c in ipairs(b:GetChildren()) do
                         if c:IsA("GuiObject") then order = order + 1 end
                     end
-                    local nb = mk("TextButton", {
-                        Name = "Btn_" .. tostring(order),
-                        Size = UDim2.fromOffset(72, 32),
-                        BackgroundColor3 = Color3.fromRGB(22, 22, 28),
-                        BackgroundTransparency = 0.1,
-                        BorderSizePixel = 0,
-                        Text = text,
-                        TextColor3 = Color3.fromRGB(232, 232, 240),
-                        Font = FONT_BOLD,
-                        TextSize = 14,
-                        AutoButtonColor = false,
-                        LayoutOrder = order,
-                        ZIndex = 3,
-                    }, b)
-                    corner(nb, 8)
-                    stroke(nb, Color3.fromRGB(70, 70, 85), 1, 0.35)
-                    local hv = false
-                    nb.MouseEnter:Connect(function()
-                        hv = true
-                        Anim.to(nb, { BackgroundColor3 = Color3.fromRGB(42, 42, 52) }, 0.12)
-                    end)
-                    nb.MouseLeave:Connect(function()
-                        hv = false
-                        Anim.to(nb, { BackgroundColor3 = Color3.fromRGB(22, 22, 28) }, 0.12)
-                    end)
-                    nb.Activated:Connect(function()
-                        playClick()
-                        if type(onClick) == "function" then pcall(onClick) end
-                    end)
+                    local nb = makeBtn(b, text, order, onClick)
                     if win._topbarRelayout then pcall(win._topbarRelayout) end
-                    return nb
+                    return nb.widget
                 end
             end
 
@@ -2360,6 +2670,7 @@ local function createTopbarButton(self, labelText)
     end)
 
     self.TopbarButton = widget
+    self._topbarAnchor = widget
     -- 记到窗口上，退出动画时一起淡出
     self.TopbarBtn = widget
     return widget
@@ -3162,11 +3473,15 @@ function UI.Create(opts)
         end
     end
 
-    -- 默认直接显示（原版是点顶栏按钮才弹，这里给个 AutoOpen 选项）
-    -- 不自动打开时，按钮立刻就建（没有加载动画要等）
-    if opts.AutoOpen == false and self._topbarPending then
+    -- 顶栏按钮：和主UI同时创建，不等加载动画
+    --   之前是等加载动画播完才建，导致顶栏出现得很晚。
+    --   现在改成 UI.Create 阶段就建好，加载动画期间它已经在屏幕上了。
+    if self._topbarPending then
         self._topbarPending = false
-        pcall(createTopbarButton, self, self._topbarText)
+        task.defer(function()
+            if self.Destroyed or UI.IsStale() then return end
+            pcall(createTopbarButton, self, self._topbarText)
+        end)
     end
 
     -- 初始化所有行的原始高度
@@ -3192,6 +3507,9 @@ function UI.Create(opts)
     -- 加载任务（可选）
     --   RealLoading = true 且传了 Tasks 才跑真实任务
     --   默认 false：用纯装饰动画，不执行任何真实工作
+    -- 登记到全局窗口列表（方便调试 / 外部控制）
+    UI._windows = UI._windows or {}
+    table.insert(UI._windows, self)
     self._realLoading = (opts.RealLoading == true)
     self._tasks = (self._realLoading and type(opts.Tasks) == "table") and opts.Tasks or nil
 
@@ -3431,13 +3749,9 @@ function Window:_PlayIntro()
             panel.Visible = true
             self:_UnlockMouse()
 
-            -- 加载动画到这里算放完了，这时才挂顶栏按钮
-            if self._topbarPending then
-                self._topbarPending = false
-                pcall(createTopbarButton, self, self._topbarText)
-                if self.TopbarSetActive then
-                    pcall(self.TopbarSetActive, true)
-                end
+            -- 顶栏已经在 UI.Create 阶段建好了，这里只同步激活态
+            if self.TopbarSetActive then
+                pcall(self.TopbarSetActive, true)
             end
 
             -- 加载完成后还有 1 秒保护期，避免刚出来就被手快的点掉
@@ -3831,7 +4145,16 @@ end
 function Window:_ShowButtonGuide()
     if not self.TopbarButton or self.GuideShown then return end
 
-    local btn = self.TopbarButton
+    -- 用真正的按钮控件定位（不是 ScreenGui 容器）
+    local btn = self._topbarAnchor or self.TopbarButton
+    if btn and btn:IsA("ScreenGui") then
+        -- 兜底：如果拿到的是 ScreenGui，找它里面的按钮
+        local bar = btn:FindFirstChild("TopbarBar")
+        if bar then
+            local inner = bar:FindFirstChild("MainBtnWidget") or bar:FindFirstChildWhichIsA("GuiObject")
+            if inner then btn = inner end
+        end
+    end
 
     -- 等按钮位置稳定
     local waited = 0
@@ -3848,7 +4171,17 @@ function Window:_ShowButtonGuide()
     local guideGui = Instance.new("ScreenGui")
     guideGui.Name = "CDMUIGuide"
     guideGui.DisplayOrder = 999
-    -- 与 self.Gui 保持一致（false），坐标系天然对齐
+    -- ============================================================
+    -- 实测结论（SOD 游戏，视口 1920x1009，GuiInset = 0,58）：
+    --   按钮 Gui: IgnoreGuiInset = true，按钮 AbsolutePosition = (168, -46)
+    --
+    --   指引 true  → Ring(168, -104)  偏差 (0, -58)  ✗
+    --   指引 false → Ring(168, -46)   偏差 (0, 0)    ✓
+    --
+    --   原因：IgnoreGuiInset = true 时，Position.Y 会被减 GuiInset，
+    --   而我们直接写 AbsolutePosition 的值，就多减了一次。
+    --   false 模式下坐标系和 AbsolutePosition 完全一致，直接用即可。
+    -- ============================================================
     guideGui.IgnoreGuiInset = false
     guideGui.ResetOnSpawn = false
     guideGui.Enabled = true
@@ -3994,11 +4327,8 @@ function Window:_ShowButtonGuide()
             TOPBAR_H = math.max(36, math.floor(vpY * 0.06))
         end
 
-        -- 2) 按钮 x：AbsolutePosition.X 是准的
-        -- 3) 按钮 y：顶栏内垂直居中
-        -- 直接用按钮的 AbsolutePosition 求中心，不做任何 inset 补偿。
-        -- 实测：ScreenGui(IgnoreGuiInset=false) 与 TopbarStandard 的坐标系一致，
-        -- 额外加 inset 会导致重复偏移。
+        -- 指引用 IgnoreGuiInset = false，坐标系和 AbsolutePosition 一致，
+        -- 直接取按钮中心即可，不需要任何 inset 补偿。
         local cx = btn.AbsolutePosition.X + sz.X / 2
         local cy = btn.AbsolutePosition.Y + sz.Y / 2
 
@@ -4651,10 +4981,15 @@ function Window:SetVisible(visible, instant)
             if not self.Visible and self.Gui then
                 self.Gui.Enabled = false
                 if self.Panel then self.Panel.Visible = false end
-                -- 有顶栏按钮，且不是点按钮关闭 → 指引按钮位置
-                local byButton = self._closedByTopbar
+                -- ============================================================
+                -- 指引：关面板就提示顶栏按钮位置（点顶栏关也提示）
+                --   之前 `not byButton` 会导致点顶栏关闭时不显示，
+                --   用户永远看不到指引。
+                --   条件改成：有按钮锚点 + 还没显示过 → 提示。
+                -- ============================================================
                 self._closedByTopbar = nil
-                if not byButton and self.TopbarButton and not self.GuideShown then
+                local anchor = self._topbarAnchor or self.TopbarButton
+                if anchor and not self.GuideShown then
                     task.spawn(function()
                         pcall(function() self:_ShowButtonGuide() end)
                     end)
@@ -4673,6 +5008,16 @@ function Window:SetVisible(visible, instant)
 end
 function Window:Toggle()
     self:SetVisible(not self.Visible)
+end
+
+-- 手动触发顶栏指引（调试 / 外部调用）
+function Window:ShowTopbarGuide()
+    self.GuideShown = false
+    if self._guideGui then
+        pcall(function() self._guideGui:Destroy() end)
+        self._guideGui = nil
+    end
+    return self:_ShowButtonGuide()
 end
 
 function Window:Tab(name)
@@ -5699,9 +6044,27 @@ function Window:Destroy()
     pcall(function() UI.DisconnectAll(self) end)
 
     -- 销毁顶栏按钮（它挂在 TopbarStandard 下，不在 self.Gui 子树里）
+    --   先播出场动画，再销毁
     if self.TopbarButton then
-        pcall(function() self.TopbarButton:Destroy() end)
+        local tb = self.TopbarButton
+        local played = false
+        if self._topbarMainBtn and self._topbarMainBtn.playExit then
+            played = pcall(function()
+                self._topbarMainBtn.playExit(function()
+                    pcall(function() if tb and tb.Parent then tb:Destroy() end end)
+                end)
+            end)
+        end
+        if not played then
+            pcall(function() tb:Destroy() end)
+        else
+            -- 兜底：0.4 秒后强制销毁
+            task.delay(0.4, function()
+                pcall(function() if tb and tb.Parent then tb:Destroy() end end)
+            end)
+        end
         self.TopbarButton = nil
+        self._topbarMainBtn = nil
     end
 
     -- 销毁按钮指引（独立 ScreenGui）
