@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.5                                                 ║
+    ║  CDMUI 2.6.6                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.5  修复滚动到底部后重开会被上拉
+-- CDMUI v2.6.6  点击音效复用单实例，修复叠音
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.5"
+UI.Version = "2.6.6"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -726,15 +726,33 @@ local function guiParent()
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
+-- 点击音效：复用单个 Sound 实例
+--   之前每次点击都 Instance.new，快速连点会有一堆 Sound 同时播放，
+--   听起来是叠在一起的多层音效（游戏自带的顶栏按钮就是复用同一个）。
+--   复用后重新 Play 会打断上一次，永远不会叠。
+local _clickSound = nil
+local function getClickSound()
+    if _clickSound and _clickSound.Parent then return _clickSound end
+    -- 先清掉可能残留的旧实例
+    for _, d in ipairs(SoundService:GetChildren()) do
+        if d:IsA("Sound") and d:GetAttribute("__CP_SFX") then
+            pcall(function() d:Destroy() end)
+        end
+    end
+    _clickSound = Instance.new("Sound")
+    _clickSound.Name = "CDMUIClick"
+    _clickSound.SoundId = CLICK_SFX
+    _clickSound.Volume = 0.5
+    _clickSound:SetAttribute("__CP_SFX", true)
+    _clickSound.Parent = SoundService
+    return _clickSound
+end
+
 local function playClick()
     pcall(function()
-        local s = Instance.new("Sound")
-        s.SoundId = CLICK_SFX
-        s.Volume = 0.5
-        s:SetAttribute("__CP_SFX", true)
-        s.Parent = SoundService
+        local s = getClickSound()
+        s.TimePosition = 0
         s:Play()
-        Debris:AddItem(s, 2)
     end)
 end
 
