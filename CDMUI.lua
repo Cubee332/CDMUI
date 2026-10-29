@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.4                                                 ║
+    ║  CDMUI 2.6.5                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.4  修复滚动位置恢复不准（底部被上拉）
+-- CDMUI v2.6.5  修复滚动到底部后重开会被上拉
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.4"
+UI.Version = "2.6.5"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4197,12 +4197,13 @@ function Window:_RestorePageScroll()
     if not page then return end
 
     local wantY = page:GetAttribute("__scrollY") or 0
-    if wantY <= 0.5 then return end
+    local atBottom = page:GetAttribute("__scrollAtBottom") == true
+    if wantY <= 0.5 and not atBottom then return end
 
     task.spawn(function()
         -- 阶段1：等 CanvasSize 算出来
         local ready = false
-        for _ = 1, 40 do
+        for _ = 1, 60 do
             if self.Destroyed then return end
             if math.max(0, page.AbsoluteCanvasSize.Y - page.AbsoluteSize.Y) > 1 then
                 ready = true
@@ -4212,31 +4213,47 @@ function Window:_RestorePageScroll()
         end
         if not ready then return end
 
-        -- 阶段2：等面板缩放动画结束
-        --   打开面板时 UIScale 从 0.88 → 1，期间 AbsoluteCanvasSize 一直在变，
-        --   这时写的 CanvasPosition 会被后续布局钳制（表现为少滚一截）
-        local deadline = os.clock() + 0.9
+        -- 阶段2：等面板缩放动画结束（缩放期间 AbsoluteCanvasSize 一直在变）
+        local deadline = os.clock() + 1.0
         while os.clock() < deadline do
             if self.Destroyed then return end
             local sc = (self.Scale and self.Scale.Scale) or 1
             local targetSc = self.BaseScale or 1
-            if math.abs(sc - targetSc) < 0.005 then break end
+            if math.abs(sc - targetSc) < 0.004 then break end
             RunService.RenderStepped:Wait()
         end
-        -- 再等两帧，确保布局彻底稳定
         RunService.RenderStepped:Wait()
         RunService.RenderStepped:Wait()
 
-        -- 阶段3：写入目标位置，多写几帧防止被钳制
-        for _ = 1, 8 do
+        -- 阶段3：写入位置
+        --   在底部时：每帧跟随最新的 maxY（因为布局可能还在微调）
+        --   否则：写固定值
+        local lastMax = -1
+        local stableFrames = 0
+        for _ = 1, 40 do
             if self.Destroyed then return end
             local maxY = math.max(0, page.AbsoluteCanvasSize.Y - page.AbsoluteSize.Y)
-            local targetY = math.min(wantY, maxY)
+
+            local targetY
+            if atBottom then
+                targetY = maxY
+            else
+                targetY = math.min(wantY, maxY)
+            end
+
             if math.abs(page.CanvasPosition.Y - targetY) > 0.3 then
                 page.CanvasPosition = Vector2.new(page.CanvasPosition.X, targetY)
+                stableFrames = 0
             else
-                return
+                -- 已经到位：如果 maxY 连续几帧没变，就可以收工
+                if math.abs(maxY - lastMax) < 0.5 then
+                    stableFrames = stableFrames + 1
+                    if stableFrames >= 3 then return end
+                else
+                    stableFrames = 0
+                end
             end
+            lastMax = maxY
             RunService.RenderStepped:Wait()
         end
     end)
@@ -4255,7 +4272,14 @@ function Window:SetVisible(visible, instant)
     if not (visible and true or false) and self.Visible then
         local cur = self.Tabs and self.Tabs[self.TabIndex]
         if cur and cur.Page then
-            cur.Page:SetAttribute("__scrollY", cur.Page.CanvasPosition.Y)
+            local pg = cur.Page
+            local maxY = math.max(0, pg.AbsoluteCanvasSize.Y - pg.AbsoluteSize.Y)
+            local y = pg.CanvasPosition.Y
+            pg:SetAttribute("__scrollY", y)
+            -- 记录「是否贴在底部」：底部要按新布局重新算，不能存死数值
+            --   存数值的话，恢复时若 maxY 还没算完，会被钳制到较小的值，
+            --   表现为「往上拉一点点」
+            pg:SetAttribute("__scrollAtBottom", (maxY > 1 and y >= maxY - 2))
         end
     end
 
@@ -4917,7 +4941,10 @@ function Window:SelectTab(index, instant)
     -- ============================================================
     local oldTabObj = self.Tabs[last]
     if oldTabObj and oldTabObj.Page and oldTabObj ~= tab then
-        oldTabObj.Page:SetAttribute("__scrollY", oldTabObj.Page.CanvasPosition.Y)
+        local op = oldTabObj.Page
+        local omax = math.max(0, op.AbsoluteCanvasSize.Y - op.AbsoluteSize.Y)
+        op:SetAttribute("__scrollY", op.CanvasPosition.Y)
+        op:SetAttribute("__scrollAtBottom", (omax > 1 and op.CanvasPosition.Y >= omax - 2))
     end
 
     -- ============================================================
