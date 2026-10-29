@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.3                                                 ║
+    ║  CDMUI 2.7.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.3  切页改为弹簧动画，旧页内容保持可见
+-- CDMUI v2.7.0  切页动画柔和化：低刚度弹簧 + 淡入淡出
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.3"
+UI.Version = "2.7.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4712,16 +4712,15 @@ end
 -- ============================================================
 function Window:_SetPageTargets(activeIndex, dir, vpW)
     self._pageAnim = self._pageAnim or {}
-
     local anim = self._pageAnim
 
-    -- 初始化每个页的运动状态
+    -- 初始化运动状态（x 位置 / v 速度 / target 目标 / op 透明度）
     for i, tt in ipairs(self.Tabs) do
         local pg = tt.Page
         if pg then
             local st = anim[pg]
             if not st then
-                st = { x = pg.Position.X.Offset, v = 0, target = 0 }
+                st = { x = pg.Position.X.Offset, v = 0, target = 0, op = 1 }
                 anim[pg] = st
             else
                 st.x = pg.Position.X.Offset
@@ -4729,16 +4728,21 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
 
             if i == activeIndex then
                 st.target = 0
+                st.opTarget = 1
                 pg.Visible = true
-                -- 新页：如果完全静止在中间，摆到滑入起点
+                -- 新页静止在中央 → 摆到滑入起点（留出更多距离，滑动感更明显）
                 if math.abs(st.x) <= 1 and math.abs(st.v) < 1 then
-                    st.x = dir * (vpW + 30)
+                    st.x = dir * (vpW * 0.55)
                     st.v = 0
+                    st.op = 0.3
                     pg.Position = UDim2.new(0, st.x, 0, 0)
+                    pg.BackgroundTransparency = 1
                 end
             else
+                -- 离开的页只滑一小段就淡出，比滑整屏更柔和
                 local side = (i < activeIndex) and -1 or 1
-                st.target = side * (vpW + 30)
+                st.target = side * (vpW * 0.35)
+                st.opTarget = 0
             end
         end
     end
@@ -4746,16 +4750,15 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
     if self._pageAnimConn then return end
 
     -- ============================================================
-    -- 弹簧阻尼积分
-    --   每帧：a = k*(target - x) - c*v
-    --         v += a*dt
-    --         x += v*dt
-    --   优点：
-    --     · 有速度连续性 → 中途改目标不会突变，滑行自然接续
-    --     · 会「冲过头再回弹」，观感有重量感，不像死的指数插值
+    -- 柔和弹簧
+    --   关键调参：
+    --     · K 降低（320→150）：加速度更缓，起步不猛
+    --     · C 提高（26→19）：临界阻尼附近，减少来回晃
+    --     · 用 dt 归一化，不同帧率下速度一致
+    --   结果：起步柔和、中段匀速感、末端轻微吸附，像真在拖
     -- ============================================================
-    local K = 320      -- 弹簧刚度（越大越快）
-    local C = 26       -- 阻尼（越大越不晃）
+    local K = 150
+    local C = 19
 
     local conn
     conn = RunService.RenderStepped:Connect(function(dt)
@@ -4773,25 +4776,48 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
                 anim[pg] = nil
             else
                 local diff = st.target - st.x
-                -- 完全静止且到位 → 收工
-                if math.abs(diff) < 0.3 and math.abs(st.v) < 1.5 then
-                    if math.abs(st.x - st.target) > 0.01 then
-                        st.x = st.target
-                        st.v = 0
-                        pg.Position = UDim2.new(0, st.x, 0, 0)
-                    end
-                    -- 停在屏幕外就隐藏（但要保留 x 值，下次切回重新摆位）
-                    if math.abs(st.target) > 10 and pg.Visible then
+                local opT = st.opTarget or 1
+                local opD = opT - st.op
+
+                -- 完全静止
+                if math.abs(diff) < 0.4 and math.abs(st.v) < 2 and math.abs(opD) < 0.02 then
+                    st.x = st.target
+                    st.v = 0
+                    st.op = opT
+                    pg.Position = UDim2.new(0, st.x, 0, 0)
+                    if opT <= 0.02 then
                         pg.Visible = false
+                    else
+                        pg.BackgroundTransparency = 1 - opT * 0.0
                     end
                 else
                     busy = true
-                    -- 弹簧积分（半隐式欧拉，稳定）
+                    -- 弹簧积分
                     local a = K * diff - C * st.v
                     st.v = st.v + a * dt
                     st.x = st.x + st.v * dt
-                    pg.Visible = true
                     pg.Position = UDim2.new(0, st.x, 0, 0)
+
+                    -- 透明度趋近
+                    st.op = st.op + opD * math.min(1, dt * 14)
+                    if st.op < 0 then st.op = 0 end
+                    if st.op > 1 then st.op = 1 end
+
+                    -- 逐行透明度（ScrollingFrame 没有 GroupTransparency）
+                    --   只处理 Row，数量有限，开销可控
+                    local alpha = st.op
+                    for _, w in ipairs(pg:GetChildren()) do
+                        if w.Name == "Row" or w.Name == "SectionRow" then
+                            local orig = w:GetAttribute("__origBgTrans")
+                            if orig == nil then
+                                orig = w.BackgroundTransparency
+                                w:SetAttribute("__origBgTrans", orig)
+                            end
+                            w.BackgroundTransparency = 1 - (1 - orig) * alpha
+                        end
+                    end
+
+                    pg.Visible = (st.op > 0.02)
                 end
             end
         end
