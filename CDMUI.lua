@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.3                                                 ║
+    ║  CDMUI 2.6.4                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.3  切页改为弹簧动画，旧页内容保持可见
+-- CDMUI v2.6.4  修复滚动位置恢复不准（底部被上拉）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.3"
+UI.Version = "2.6.4"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4188,6 +4188,60 @@ function UI.ForceRestoreMouse(wantBehavior, wantIcon)
     end
 end
 
+-- 恢复当前页的滚动位置
+--   ScrollingFrame 在隐藏/重新布局后 CanvasPosition 会被钳制，
+--   必须等 CanvasSize 计算完成再写，否则会「往上拉一点」
+function Window:_RestorePageScroll()
+    local cur = self.Tabs and self.Tabs[self.TabIndex]
+    local page = cur and cur.Page
+    if not page then return end
+
+    local wantY = page:GetAttribute("__scrollY") or 0
+    if wantY <= 0.5 then return end
+
+    task.spawn(function()
+        -- 阶段1：等 CanvasSize 算出来
+        local ready = false
+        for _ = 1, 40 do
+            if self.Destroyed then return end
+            if math.max(0, page.AbsoluteCanvasSize.Y - page.AbsoluteSize.Y) > 1 then
+                ready = true
+                break
+            end
+            RunService.RenderStepped:Wait()
+        end
+        if not ready then return end
+
+        -- 阶段2：等面板缩放动画结束
+        --   打开面板时 UIScale 从 0.88 → 1，期间 AbsoluteCanvasSize 一直在变，
+        --   这时写的 CanvasPosition 会被后续布局钳制（表现为少滚一截）
+        local deadline = os.clock() + 0.9
+        while os.clock() < deadline do
+            if self.Destroyed then return end
+            local sc = (self.Scale and self.Scale.Scale) or 1
+            local targetSc = self.BaseScale or 1
+            if math.abs(sc - targetSc) < 0.005 then break end
+            RunService.RenderStepped:Wait()
+        end
+        -- 再等两帧，确保布局彻底稳定
+        RunService.RenderStepped:Wait()
+        RunService.RenderStepped:Wait()
+
+        -- 阶段3：写入目标位置，多写几帧防止被钳制
+        for _ = 1, 8 do
+            if self.Destroyed then return end
+            local maxY = math.max(0, page.AbsoluteCanvasSize.Y - page.AbsoluteSize.Y)
+            local targetY = math.min(wantY, maxY)
+            if math.abs(page.CanvasPosition.Y - targetY) > 0.3 then
+                page.CanvasPosition = Vector2.new(page.CanvasPosition.X, targetY)
+            else
+                return
+            end
+            RunService.RenderStepped:Wait()
+        end
+    end)
+end
+
 function Window:SetVisible(visible, instant)
     if self.Destroyed then return end
     -- 加载动画进行中，外部关闭请求一律忽略
@@ -4195,6 +4249,14 @@ function Window:SetVisible(visible, instant)
 
     if not instant and self.Visible ~= (visible and true or false) then
         playClick()
+    end
+
+    -- 关闭前记下当前页的滚动位置
+    if not (visible and true or false) and self.Visible then
+        local cur = self.Tabs and self.Tabs[self.TabIndex]
+        if cur and cur.Page then
+            cur.Page:SetAttribute("__scrollY", cur.Page.CanvasPosition.Y)
+        end
     end
 
     self.Visible = visible and true or false
@@ -4250,6 +4312,8 @@ function Window:SetVisible(visible, instant)
                 w.BackgroundTransparency = w:GetAttribute("__baseTrans") or 0
             end
             self.FirstShow = false
+            -- 恢复当前页滚动位置
+            self:_RestorePageScroll()
             return
         end
 
@@ -4301,6 +4365,9 @@ function Window:SetVisible(visible, instant)
             end
             return
         end
+
+        -- 恢复当前页滚动位置（等面板动画开始后再恢复，避免被布局打断）
+        self:_RestorePageScroll()
 
         -- 起点：稍微缩小、稍微下移
         panel.Position = UDim2.new(0.5, 0, 0.5, 10)
@@ -4844,6 +4911,16 @@ function Window:SelectTab(index, instant)
     local dir = (index > last) and 1 or -1
 
     -- ============================================================
+    -- 滚动位置记忆
+    --   每个 Page 独立记住自己的 CanvasPosition.Y
+    --   切走时存，切回时还原（等布局稳定后）
+    -- ============================================================
+    local oldTabObj = self.Tabs[last]
+    if oldTabObj and oldTabObj.Page and oldTabObj ~= tab then
+        oldTabObj.Page:SetAttribute("__scrollY", oldTabObj.Page.CanvasPosition.Y)
+    end
+
+    -- ============================================================
     -- 行可见性：每页的行归属自己的 Page 容器，
     --   切页时必须把当前页的所有行设为 Visible，
     --   否则页面滑进来了但里面是空的。
@@ -4892,11 +4969,38 @@ function Window:SelectTab(index, instant)
 
     -- ============================================================
     -- 左右滑动（连续趋近式）
-    --   不预设起点、不强制拉回中间。
-    --   每页只改「目标 X」，动画从当前 X 接续。
-    --   所以来回快速切页时，滑动会自然衔接，不会跳变。
     -- ============================================================
     self:_SetPageTargets(index, dir, vpW)
+
+    -- ============================================================
+    -- 恢复新页的滚动位置
+    --   关键：AutomaticCanvasSize 在页面隐藏期间不计算，
+    --   刚显示时 AbsoluteCanvasSize 可能还是 0 或旧值，
+    --   此时写 CanvasPosition 会被引擎钳制（表现为「往上拉一点」）。
+    --   所以要等布局稳定（CanvasSize 足够大）后再写，并重试几帧。
+    -- ============================================================
+    local page = tab.Page
+    if page then
+        local wantY = page:GetAttribute("__scrollY") or 0
+        if wantY > 0.5 then
+            task.spawn(function()
+                for _ = 1, 20 do
+                    if self.Destroyed or self.TabIndex ~= index then return end
+                    local maxY = math.max(0,
+                        page.AbsoluteCanvasSize.Y - page.AbsoluteSize.Y)
+                    if maxY > 1 then
+                        local targetY = math.min(wantY, maxY)
+                        if math.abs(page.CanvasPosition.Y - targetY) > 0.5 then
+                            page.CanvasPosition =
+                                Vector2.new(page.CanvasPosition.X, targetY)
+                        end
+                        return
+                    end
+                    RunService.RenderStepped:Wait()
+                end
+            end)
+        end
+    end
 end
 
 
