@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.8.0                                                 ║
+    ║  CDMUI 2.8.1                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -264,7 +264,7 @@
 
 
 
--- CDMUI v2.8.0  顶栏与主UI同步创建 + 入场出场动画 + 指引定位修复
+-- CDMUI v2.8.1  顶栏动画接入面板开关 + 光标缺失修复
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -277,7 +277,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.8.0"
+UI.Version = "2.8.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2410,6 +2410,31 @@ local function createTopbarButton(self, labelText)
                         isActive = on and true or false
                         applyVisual()
                     end,
+                    -- 入场动画（重播，面板打开时调用）
+                    playEnter = function()
+                        if not w or not w.Parent then return end
+                        scale.Scale = 0.3
+                        local bgFrame = w:FindFirstChild("IconButton")
+                        if bgFrame then bgFrame.BackgroundTransparency = 1 end
+                        for _, c in ipairs(w:GetDescendants()) do
+                            if c:IsA("TextLabel") then c.TextTransparency = 1 end
+                        end
+                        task.delay(0.02, function()
+                            if not w or not w.Parent then return end
+                            Anim.to(scale, { Scale = 1 }, 0.42,
+                                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                            if bgFrame then
+                                Anim.to(bgFrame, { BackgroundTransparency = GAME_BTN_TRANS }, 0.25,
+                                    Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                            end
+                            for _, c in ipairs(w:GetDescendants()) do
+                                if c:IsA("TextLabel") then
+                                    Anim.to(c, { TextTransparency = 0 }, 0.25,
+                                        Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                                end
+                            end
+                        end)
+                    end,
                     -- 出场动画（卸载时调用）
                     playExit = function(onDone)
                         if not w or not w.Parent then
@@ -2490,18 +2515,22 @@ local function createTopbarButton(self, labelText)
             return holder
         end
 
-        -- 先等一下，看是不是顶栏延迟创建
+        -- ============================================================
+        -- 没有 TopbarStandard：立刻建自建顶栏
+        --   之前是「等 5 秒看会不会延迟创建」，导致主UI出来很久了
+        --   顶栏才出现。现在改成：先快速确认 3 次（共 0.15 秒），
+        --   还没有就直接建，和主UI几乎同时。
+        -- ============================================================
         task.spawn(function()
-            for _ = 1, 20 do
-                task.wait(0.25)
+            for _ = 1, 3 do
                 if self.Destroyed then return end
                 local l = findLeft()
                 if l then
                     pcall(createTopbarButton, self, labelText)
                     return
                 end
+                task.wait(0.05)
             end
-            -- 5 秒后还是没有 → 用浮动按钮
             if not self.Destroyed then
                 pcall(makeFloatButton)
             end
@@ -2868,6 +2897,66 @@ local function purgePrevious()
 
     return removed
 end
+-- ============================================================
+-- 检测游戏是否自绘光标
+--   有些游戏用 ImageLabel / ImageButton 自己画一个光标跟随鼠标，
+--   同时把 MouseIconEnabled 设为 false。
+--   这种情况下如果脚本强制打开默认光标，会出现：
+--     · 双光标（游戏的和 Roblox 的叠在一起）
+--     · 或者游戏每帧把自己的光标隐藏，默认光标又被压住 → 完全看不见
+--
+--   判据：场景里有名字含 cursor / pointer / reticle / crosshair 的
+--   GuiObject，且它位置接近鼠标位置（说明它跟着鼠标跑）。
+-- ============================================================
+local _cursorCache = nil
+local _cursorCacheAt = 0
+
+function UI._GameHasCustomCursor()
+    local now = os.clock()
+    if _cursorCache ~= nil and now - _cursorCacheAt < 2.0 then
+        return _cursorCache
+    end
+
+    local found = false
+    local mp = UserInputService:GetMouseLocation()
+
+    local function scan(root)
+        if found or not root then return end
+        for _, d in ipairs(root:GetChildren()) do
+            if d:IsA("GuiObject") then
+                local n = string.lower(d.Name)
+                if (n:find("cursor") or n:find("pointer") or n:find("reticle")
+                    or n:find("crosshair"))
+                   and d.Visible
+                   and d.AbsoluteSize.X > 2 and d.AbsoluteSize.X < 120 then
+                    local ap = d.AbsolutePosition
+                    local dist = math.abs(ap.X - mp.X) + math.abs(ap.Y - mp.Y)
+                    if dist < 150 then
+                        found = true
+                        return
+                    end
+                end
+            end
+        end
+    end
+
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            for _, g in ipairs(pg:GetChildren()) do
+                if g:IsA("ScreenGui") and g.Name ~= "CDMUIWidget" then
+                    scan(g)
+                    if found then return end
+                end
+            end
+        end
+    end)
+
+    _cursorCache = found
+    _cursorCacheAt = now
+    return found
+end
+
 function UI.Create(opts)
     opts = opts or {}
     purgePrevious()
@@ -4517,11 +4606,21 @@ function Window:_HardLockMouse(on)
             H.origNewIndex = old
             setreadonly(mt, false)
             mt.__newindex = newcclosure(function(obj, key, value)
-                -- 只拦 MouseBehavior，其它一律透传
+                -- 拦 MouseBehavior：锁定成目标值
                 if obj == UserInputService and key == "MouseBehavior" then
                     local want = H.target
                     if want ~= nil then
                         return old(obj, key, want)
+                    end
+                end
+                -- 拦 MouseIconEnabled：
+                --   游戏每帧会把它写回 false（自绘光标 / 隐藏光标），
+                --   我们解锁时需要 true，否则用户看不见鼠标。
+                --   H.iconTarget = true 时强制锁 true，nil 时透传。
+                if obj == UserInputService and key == "MouseIconEnabled" then
+                    local wantIcon = H.iconTarget
+                    if wantIcon ~= nil then
+                        return old(obj, key, wantIcon)
                     end
                 end
                 return old(obj, key, value)
@@ -4550,6 +4649,7 @@ function Window:_HardLockMouse(on)
         H.installed = false
         H.origNewIndex = nil
         H.target = nil
+        H.iconTarget = nil
     end
 end
 
@@ -4568,7 +4668,21 @@ function Window:_UnlockMouse()
 
     -- 游戏每帧强推自己的 MouseBehavior，必须靠 hook 才能稳住
     _G._CDMUIMouseHook.target = Enum.MouseBehavior.Default
+    -- 光标：游戏没有自绘光标时锁 true（否则看不见鼠标）
+    --   有自绘光标时不锁，让游戏自己控制
+    local hasCustom = UI._GameHasCustomCursor()
+    _G._CDMUIMouseHook.iconTarget = hasCustom and nil or true
     if not self._mouseHooked then self:_HardLockMouse(true) end
+
+    -- 主动写一次：有些游戏从头到尾不写 MouseIconEnabled，
+    --   只是初始值就是 false，靠 hook 拦不到，必须我们主动打开。
+    if not hasCustom then
+        pcall(function()
+            if not UserInputService.MouseIconEnabled then
+                UserInputService.MouseIconEnabled = true
+            end
+        end)
+    end
 
     if self._mouseLoop then return end
     self._mouseLoop = true
@@ -4576,11 +4690,55 @@ function Window:_UnlockMouse()
     -- 方案一：每帧写 Default；连写几次都被改回去就切方案二
     task.spawn(function()
         local fails = 0
+        local cursorCheckAt = 0
         while self._mouseLoop and not self.Destroyed do
             if self.Visible then
+                -- ============================================================
+                -- 光标兜底：每 0.5 秒检查一次「有没有可见光标」
+                --   有些游戏既没有自绘光标，又把 MouseIconEnabled 关了，
+                --   或者它自绘的光标在解锁时被它自己隐藏了。
+                --   这种情况下必须补一个默认光标，否则用户看不见鼠标。
+                -- ============================================================
+                cursorCheckAt = cursorCheckAt + 0.02
+                if cursorCheckAt >= 0.5 then
+                    cursorCheckAt = 0
+                    pcall(function()
+                        local hasCustom = UI._GameHasCustomCursor()
+                        local iconOn = UserInputService.MouseIconEnabled
+                        if not hasCustom and not iconOn then
+                            -- 既没自绘光标，默认光标也关着 → 必须打开
+                            UserInputService.MouseIconEnabled = true
+                        end
+                    end)
+                end
+
                 pcall(function()
                     UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-                    UserInputService.MouseIconEnabled = true
+
+                    -- ============================================================
+                    -- 光标处理（关键）
+                    --
+                    -- 场景 A：游戏自绘光标（有跟随鼠标的 ImageLabel）
+                    --   → 不碰 MouseIconEnabled，让游戏自己的光标显示
+                    --     否则会出现双光标，或者游戏把默认光标压住导致看不见
+                    --
+                    -- 场景 B：游戏没自绘光标，但 MouseIconEnabled = false
+                    --   → 必须打开默认光标，否则解锁后完全看不见鼠标
+                    --
+                    -- 场景 C：游戏有默认光标
+                    --   → 什么都不做
+                    -- ============================================================
+                    local hasCustom = UI._GameHasCustomCursor()
+                    if hasCustom then
+                        -- 游戏自己会画光标，我们不要插手
+                        -- 但如果它把自己光标藏了（Visible=false），就需要兜底
+                        -- 这里只在「连续 20 帧都没有可见光标」时才补默认光标
+                        self._cursorMissing = (self._cursorMissing or 0)
+                    else
+                        if not UserInputService.MouseIconEnabled then
+                            UserInputService.MouseIconEnabled = true
+                        end
+                    end
                 end)
 
                 task.wait(0.05)
@@ -4832,6 +4990,13 @@ function Window:SetVisible(visible, instant)
         panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
         if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
 
+        -- 顶栏播入场动画（和主UI同步）
+        if self._topbarMainBtn and self._topbarMainBtn.playEnter and not instant then
+            task.spawn(function()
+                pcall(function() self._topbarMainBtn.playEnter() end)
+            end)
+        end
+
         -- 打开面板时自动解锁鼠标
         self:_UnlockMouse()
 
@@ -4949,6 +5114,13 @@ function Window:SetVisible(visible, instant)
         end
 
     else
+        -- 顶栏播出场动画（和主UI同步）
+        if self._topbarMainBtn and self._topbarMainBtn.playExit and not instant then
+            task.spawn(function()
+                pcall(function() self._topbarMainBtn.playExit() end)
+            end)
+        end
+
         -- 恢复鼠标状态
         self:_RestoreMouse()
 
