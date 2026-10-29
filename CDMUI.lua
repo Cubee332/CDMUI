@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.5.0                                                 ║
+    ║  CDMUI 2.6.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.5.0  切页动画引擎：连续趋近式，支持中途断开接续
+-- CDMUI v2.6.0  切页改为左右滑动，支持中途接续
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.5.0"
+UI.Version = "2.6.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2818,10 +2818,10 @@ function UI.Create(opts)
         end))
     end
 
-    -- 列表
-    local list = mk("ScrollingFrame", {
+    -- 列表视口：只负责裁剪，不滚动
+    --   每个 Tab 有自己的 ScrollingFrame（Page），放在这里左右滑动
+    local list = mk("Frame", {
         Name = "List",
-        -- 顶部和 Tab 栏留出明确间隔，底部避开 Hint 提示
         Size = UDim2.new(1, -LAYOUT.padX * 2, 1,
             -(LAYOUT.listTop + LAYOUT.gapTabList + 34)),
         Position = UDim2.new(0, LAYOUT.padX, 0,
@@ -2829,26 +2829,11 @@ function UI.Create(opts)
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         ZIndex = 3,
-        ScrollBarThickness = IS_MOBILE and 6 or 4,
-        ScrollBarImageColor3 = Color3.fromRGB(100, 100, 110),
-        ScrollBarImageTransparency = IS_MOBILE and 0.4 or 0.3,
-        ScrollingDirection = Enum.ScrollingDirection.Y,
-        CanvasSize = UDim2.new(0, 0, 0, 0),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ElasticBehavior = Enum.ElasticBehavior.Never,
-        Active = true,
+        ClipsDescendants = true,
+        Active = false,
     }, panel)
-    local pad = mk("UIPadding", {
-        PaddingTop = UDim.new(0, 2),
-        PaddingBottom = UDim.new(0, 8),
-        PaddingRight = UDim.new(0, 0),
-    }, list)
-    mk("UIListLayout", {
-        FillDirection = Enum.FillDirection.Vertical,
-        Padding = UDim.new(0, 6),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    }, list)
     self.List = list
+    self._viewport = list
     list:SetAttribute("__basePos", list.Position)
     list:SetAttribute("__baseTrans", list.BackgroundTransparency)
 
@@ -4412,10 +4397,44 @@ function Window:Tab(name)
     tab.Items = 0
     tab.Rows = {}
     tab.Widgets = {}
-    tab.Container = self.List
 
     table.insert(self.Tabs, tab)
     local tabIndex = #self.Tabs
+
+    -- 每个 Tab 一个独立滚动容器
+    --   放在 Viewport（self.List 的内部区）里，靠 Position.X 左右滑动
+    --   这样切页时可以让「旧页左滑出 / 新页右滑入」
+    local vp = self._viewport or self.List
+    local page = mk("ScrollingFrame", {
+        Name = "Page_" .. name,
+        Size = UDim2.new(1, 0, 1, 0),
+        Position = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 3,
+        ScrollBarThickness = IS_MOBILE and 6 or 4,
+        ScrollBarImageColor3 = Color3.fromRGB(100, 100, 110),
+        ScrollBarImageTransparency = IS_MOBILE and 0.4 or 0.3,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ElasticBehavior = Enum.ElasticBehavior.Never,
+        Active = true,
+        Visible = (tabIndex == 1),
+    }, vp)
+    mk("UIPadding", {
+        PaddingTop = UDim.new(0, 2),
+        PaddingBottom = UDim.new(0, 8),
+    }, page)
+    mk("UIListLayout", {
+        FillDirection = Enum.FillDirection.Vertical,
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, page)
+
+    tab.Container = page
+    tab.Page = page
+    page:SetAttribute("__pageIndex", tabIndex)
 
     -- Tab 按钮：等分整行，不依赖固定宽度（Tab 数量变化也不会错位）
     local btn = mk("TextButton", {
@@ -4645,7 +4664,9 @@ end
 --   4) 滚动位置只在「旧页已完全收起」的瞬间归零，避免可见跳变
 -- 平滑滚动列表到顶部：从当前 CanvasPosition 缓动到 0
 function Window:_ScrollToTop(duration)
-    local list = self.List
+    -- 滚动当前页容器（不是 viewport）
+    local cur = self.Tabs and self.Tabs[self.TabIndex]
+    local list = cur and cur.Page or self.List
     if not list then return end
 
     -- 已经在顶部就不折腾
@@ -4684,77 +4705,93 @@ end
 --   这样中途切换目标时，动画会从当前高度自然接续，
 --   不会跳变、不会重置。
 -- ============================================================
-function Window:_EnsureRowAnimator()
-    if self._rowAnimConn then return end
+-- ============================================================
+-- 页面滑动引擎（连续趋近式）
+--   每页记一个目标 X，每帧读当前 X 朝目标插值。
+--   中途切页只改目标 → 动画从当前位置接续，不会跳回起点。
+-- ============================================================
+function Window:_SetPageTargets(activeIndex, dir, vpW)
+    self._pageTargets = self._pageTargets or {}
+    local tg = self._pageTargets
 
-    -- 每行的目标高度（nil = 不参与动画）
-    local targets = {}
+    -- 新页：如果它正静止在屏幕中央（上一轮已完全结束），
+    -- 就把它摆到滑入起点，这样才有「滑入」效果。
+    -- 如果它还在动画中（位置不为 0），保持原样直接接续。
+    local activePg = self.Tabs[activeIndex] and self.Tabs[activeIndex].Page
+    if activePg then
+        local cur = activePg.Position.X.Offset
+        local inTransit = tg[activePg] ~= nil and math.abs(cur) > 2
+        if not inTransit and math.abs(cur) <= 2 then
+            -- 静止在中央：拉到滑入起点
+            activePg.Position = UDim2.new(0, dir * (vpW + 24), 0, 0)
+        end
+        activePg.Visible = true
+    end
+
+    for i, tt in ipairs(self.Tabs) do
+        local pg = tt.Page
+        if pg then
+            if i == activeIndex then
+                tg[pg] = 0
+                pg.Visible = true
+            else
+                local side = (i < activeIndex) and -1 or 1
+                tg[pg] = side * (vpW + 24)
+            end
+        end
+    end
+
+    -- 已经跑着就不重复起循环
+    if self._pageAnimConn then return end
+
     local conn
-
-    local function step()
+    conn = RunService.RenderStepped:Connect(function()
         if self.Destroyed then
             if conn then pcall(function() conn:Disconnect() end) end
-            self._rowAnimConn = nil
+            self._pageAnimConn = nil
             return
         end
 
         local busy = false
-        for obj, tgt in pairs(targets) do
-            if not obj or not obj.Parent then
-                targets[obj] = nil
+        for pg, tgt in pairs(tg) do
+            if not pg or not pg.Parent then
+                tg[pg] = nil
             else
-                local cur = obj.Size.Y.Offset
+                local cur = pg.Position.X.Offset
                 local diff = tgt - cur
-                if math.abs(diff) < 0.6 then
-                    -- 到位：钉死终值（无条件写，保证精确）
-                    obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, tgt)
-                    targets[obj] = nil
+                if math.abs(diff) < 1 then
+                    if math.abs(diff) > 0.01 then
+                        pg.Position = UDim2.new(0, tgt, 0, 0)
+                    end
+                    tg[pg] = nil
+                    -- 滑到屏幕外就隐藏，省渲染
+                    if math.abs(tgt) > 10 then
+                        pg.Visible = false
+                    end
                 else
                     busy = true
-                    -- 指数趋近：每帧走剩余距离的 28%
-                    local nextH = cur + diff * 0.28
-                    -- 步长下限：避免指数趋近尾部拖太长
-                    local step = math.abs(nextH - cur)
-                    if step < 1.2 then
-                        nextH = cur + (diff > 0 and 1.2 or -1.2)
+                    -- 指数趋近：每帧走 30%
+                    local nx = cur + diff * 0.30
+                    -- 最小步长，避免长尾拖沓
+                    if math.abs(nx - cur) < 2.2 then
+                        nx = cur + (diff > 0 and 2.2 or -2.2)
                     end
-                    -- 不要越过目标
-                    if (diff > 0 and nextH > tgt) or (diff < 0 and nextH < tgt) then
-                        nextH = tgt
+                    -- 不越过目标
+                    if (diff > 0 and nx > tgt) or (diff < 0 and nx < tgt) then
+                        nx = tgt
                     end
-                    obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, nextH)
+                    pg.Visible = true
+                    pg.Position = UDim2.new(0, nx, 0, 0)
                 end
             end
         end
 
         if not busy then
             if conn then pcall(function() conn:Disconnect() end) end
-            self._rowAnimConn = nil
+            self._pageAnimConn = nil
         end
-    end
-
-    conn = RunService.RenderStepped:Connect(step)
-    self._rowAnimConn = conn
-    self._rowTargets = targets
-end
-
--- 给某一行设定目标高度（参与连续动画）
-function Window:_SetRowTarget(obj, targetH)
-    if not obj or not obj.Parent then return end
-    self:_EnsureRowAnimator()
-    local targets = self._rowTargets
-    if not targets then return end
-
-    if targetH <= 0.5 then
-        -- 收到底：动画到 0 后隐藏
-        targets[obj] = 0
-        obj.Visible = true
-        obj:SetAttribute("__pendingHide", true)
-    else
-        obj:SetAttribute("__pendingHide", false)
-        obj.Visible = true
-        targets[obj] = targetH
-    end
+    end)
+    self._pageAnimConn = conn
 end
 
 function Window:SelectTab(index, instant)
@@ -4767,6 +4804,10 @@ function Window:SelectTab(index, instant)
         self:_ScrollToTop(0.34)
         return
     end
+
+    -- 切页 token
+    self._tabToken = (self._tabToken or 0) + 1
+    local token = self._tabToken
 
     self.TabIndex = index
     self:LayoutTabs()
@@ -4787,38 +4828,20 @@ function Window:SelectTab(index, instant)
         end)
     end
 
-    -- 取原始高度
-    local function baseH(w)
-        local b = w:GetAttribute("__baseH")
-        if not b or b <= 0 then
-            b = w.Size.Y.Offset
-            if b > 0 then w:SetAttribute("__baseH", b) end
-        end
-        return b or 0
-    end
+    local vpW = self.List.AbsoluteSize.X
+    if vpW <= 1 then vpW = 380 end
 
-    -- instant 模式：直接落终态，不参与动画
+    local dir = (index > last) and 1 or -1
+
+    -- instant：直接落终态
     if instant then
-        if self._rowTargets then
-            for k in pairs(self._rowTargets) do self._rowTargets[k] = nil end
-        end
+        self._pageTargets = {}
         for i, tt in ipairs(self.Tabs) do
-            local vis = (i == index)
-            for _, w in ipairs(tt.Widgets) do
-                if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                    local b = baseH(w)
-                    w.Visible = vis
-                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, vis and b or 0)
-                    w:SetAttribute("__pendingHide", false)
-                end
-            end
-            for _, r in ipairs(self.ExpandRestorers) do
-                if r.tab == tt and r.apply then
-                    pcall(r.apply, vis and r.get() == true or false, false)
-                end
+            if tt.Page then
+                tt.Page.Visible = (i == index)
+                tt.Page.Position = UDim2.new(0, 0, 0, 0)
             end
         end
-        self.List.CanvasPosition = Vector2.new(0, 0)
         task.defer(function()
             if not self.Destroyed then pcall(function() self:_ResetAllRowHover() end) end
         end)
@@ -4826,88 +4849,14 @@ function Window:SelectTab(index, instant)
     end
 
     -- ============================================================
-    -- 非 instant：用连续动画
-    --   当前页所有行 → 目标 = baseH（展开）
-    --   其他页所有行 → 目标 = 0（收起）
-    --   中途切页时，行高保持当前值，只是换了个目标，
-    --   动画会从当前高度继续，实现无缝接续
+    -- 左右滑动（连续趋近式）
+    --   不预设起点、不强制拉回中间。
+    --   每页只改「目标 X」，动画从当前 X 接续。
+    --   所以来回快速切页时，滑动会自然衔接，不会跳变。
     -- ============================================================
-    for i, tt in ipairs(self.Tabs) do
-        local visible = (i == index)
-        for _, w in ipairs(tt.Widgets) do
-            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                local b = baseH(w)
-                if visible then
-                    -- 当前页：先确保可见，目标 = 原高
-                    w.Visible = true
-                    w:SetAttribute("__pendingHide", false)
-                    self:_SetRowTarget(w, b)
-                else
-                    -- 非当前页：目标 = 0（若已经在 0 且隐藏，跳过）
-                    local cur = w.Size.Y.Offset
-                    if cur > 0.5 or w.Visible then
-                        self:_SetRowTarget(w, 0)
-                    end
-                end
-            end
-        end
-
-        -- 子行：当前页按展开状态恢复，其他页立即收起
-        for _, r in ipairs(self.ExpandRestorers) do
-            if r.tab == tt and r.apply then
-                if visible then
-                    pcall(r.apply, r.get() == true, false)
-                else
-                    pcall(r.apply, false, false)
-                end
-            end
-        end
-    end
-
-    self.List.CanvasPosition = Vector2.new(0, 0)
-
-    -- 收完的行自动隐藏（等动画结束后检查）
-    task.spawn(function()
-        local deadline = os.clock() + 1.0
-        while os.clock() < deadline do
-            if self.Destroyed then return end
-            local anyPending = false
-            for i, tt in ipairs(self.Tabs) do
-                if i ~= index then
-                    for _, w in ipairs(tt.Widgets) do
-                        if w and w.Parent and w:GetAttribute("__pendingHide") then
-                            if w.Size.Y.Offset <= 0.6 then
-                                w.Visible = false
-                                w:SetAttribute("__pendingHide", false)
-                            else
-                                anyPending = true
-                            end
-                        end
-                    end
-                end
-            end
-            if not anyPending then break end
-            task.wait(0.05)
-        end
-        -- 兜底：确保所有非当前页都隐藏
-        for i, tt in ipairs(self.Tabs) do
-            if i ~= index then
-                for _, w in ipairs(tt.Widgets) do
-                    if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                        if w.Size.Y.Offset <= 0.6 then
-                            w.Visible = false
-                            w:SetAttribute("__pendingHide", false)
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    task.defer(function()
-        if not self.Destroyed then pcall(function() self:_ResetAllRowHover() end) end
-    end)
+    self:_SetPageTargets(index, dir, vpW)
 end
+
 
 function Window:Notify(text, duration)
     if self.Destroyed then return end
