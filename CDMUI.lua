@@ -6719,6 +6719,9 @@ function Tab:Expand(cfg)
     end
     registerControl(self, key, ctrl)
 
+    -- HideArrow：不显示展开箭头（子项固定展开，点整行开关功能）
+    local hideArrow = (cfg.HideArrow == true)
+
     local arrowBtn = mk("TextButton", {
         Name = "Arrow",
         Size = UDim2.fromOffset(ARROW_W, ARROW_W),
@@ -6731,6 +6734,7 @@ function Tab:Expand(cfg)
         TextSize = LAYOUT.arrowText,
         Active = true,
         AutoButtonColor = false,
+        Visible = not hideArrow,
         ZIndex = 20,
     }, row)
     corner(arrowBtn, SIZE.radius)
