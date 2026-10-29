@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.3.6                                                 ║
+    ║  CDMUI 2.3.7                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.3.6  修复切页后 Section 小标题变白
+-- CDMUI v2.3.7  修复快速切页导致动画被跳过
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.3.6"
+UI.Version = "2.3.7"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4661,6 +4661,25 @@ function Window:SelectTab(index, instant)
     local tab = self.Tabs[index]
     if not tab then return end
     local last = self.TabIndex
+
+    -- 切页代数：每次切页自增
+    --   快速连续切页时，上一轮的动画可能还在跑（task.delay / Anim.to），
+    --   它们会和新一轮抢同一个属性，导致「动画被跳过」「行高错乱」。
+    --   所有异步回调都要校验代数，不匹配就直接放弃。
+    self._tabGen = (self._tabGen or 0) + 1
+    local gen = self._tabGen
+
+    -- 立即把所有行的 Size 动画停掉，落回确定状态
+    --   不做这一步的话，旧动画会在新页展开时继续写 Size
+    --   （快速切页时表现为「动画被跳过」或行高错乱）
+    for _, tt in ipairs(self.Tabs) do
+        for _, w in ipairs(tt.Widgets) do
+            if w and w.Parent then
+                pcall(function() Anim.cancel(w, { "Size", "BackgroundTransparency" }) end)
+            end
+        end
+    end
+
     self.TabIndex = index
 
     -- Tab 宽度重算，避免被别处覆盖
@@ -4749,7 +4768,30 @@ function Window:SelectTab(index, instant)
     local oldTab = self.Tabs[last]
 
     -- 首次 / 瞬间切换：直接完成
-    if instant or last == index or not oldTab then
+    -- 判断当前页的行是否「已经稳定在完整高度」
+    --   快速切页（人物→枪械→人物）时，第三下 last==index，
+    --   但上一轮动画可能还没把行撑回原高。
+    --   这时候如果直接 setPage（无动画），就会看到「动画被跳过」。
+    local function rowsAreSettled(idx)
+        local tt = self.Tabs[idx]
+        if not tt then return true end
+        local checked = 0
+        for _, w in ipairs(tt.Widgets) do
+            if w and w.Parent and w.Name == "Row" then
+                local base = w:GetAttribute("__baseH") or 0
+                if base > 0 then
+                    checked = checked + 1
+                    -- 差超过 3px 就认为还没稳定
+                    if math.abs(w.Size.Y.Offset - base) > 3 then
+                        return false
+                    end
+                end
+            end
+        end
+        return checked == 0 or true
+    end
+
+    if instant or (last == index and rowsAreSettled(index)) or not oldTab then
         local sameTab = (last == index)
         for i, t in ipairs(self.Tabs) do
             setPage(t, i == index)
@@ -4767,6 +4809,28 @@ function Window:SelectTab(index, instant)
                 pcall(function() self:_ResetAllRowHover() end)
             end
         end)
+        return
+    end
+
+    -- 走到这里说明：要么是切到别的页，要么是「切回同一页但行还没稳定」
+    --   后者也要走动画，否则会看到跳变
+    if last == index then
+        -- 切回同一页但没稳定：把行从当前高度动画回原高
+        local sameTab = self.Tabs[index]
+        local delay = 0
+        for _, w in ipairs(sameTab.Widgets) do
+            if w and w.Parent and w.Name == "Row" then
+                local base = w:GetAttribute("__baseH") or 0
+                if base > 0 then
+                    w.Visible = true
+                    Anim.to(w, {
+                        Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base),
+                    }, 0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, delay)
+                    delay = delay + 0.005
+                end
+            end
+        end
+        pcall(function() self:_ResetAllRowHover() end)
         return
     end
 
@@ -4801,7 +4865,7 @@ function Window:SelectTab(index, instant)
 
     -- ② 收起几乎同时开始，不等滚动停
     task.delay(0.02, function()
-        if self.Destroyed or self.TabIndex ~= index then return end
+        if self.Destroyed or self._tabGen ~= gen then return end
 
         for idx, w in ipairs(oldRows) do
             local fromBottom = (#oldRows - idx) * STAGGER_OUT
@@ -4824,20 +4888,23 @@ function Window:SelectTab(index, instant)
         --   而是让新页在旧页还没完全消失时就开始撑开，
         --   两边在时间轴上重叠，视觉上是连续流动而不是突然换页。
         task.delay(collapseTotal * 0.62, function()
-            if self.Destroyed or self.TabIndex ~= index then return end
+            if self.Destroyed or self._tabGen ~= gen then return end
             -- 切页开始时先清一次悬停残留，避免旧页的行带着高亮消失
             pcall(function() self:_ResetAllRowHover() end)
 
             -- 旧页隐藏
-            --   注意：这里不再用 setPage 硬设高度
-            --   收起动画已经把高度降到接近 0，只需要把 Visible 关掉
-            for _, w in ipairs(oldTab.Widgets) do
-                if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                    w.Visible = false
+            --   保护：如果 oldTab 又变回当前页了（用户快速切回），
+            --        不能把它隐藏，否则会出现「切回来了但是空的」
+            local oldIsCurrent = (oldTab == self.Tabs[self.TabIndex])
+            if not oldIsCurrent then
+                for _, w in ipairs(oldTab.Widgets) do
+                    if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                        w.Visible = false
+                    end
                 end
-            end
-            for _, r in ipairs(self.ExpandRestorers) do
-                if r.tab == oldTab and r.apply then r.apply(false, false) end
+                for _, r in ipairs(self.ExpandRestorers) do
+                    if r.tab == oldTab and r.apply then r.apply(false, false) end
+                end
             end
 
             -- 位置兜底，确保新页从顶部开始
@@ -4895,7 +4962,7 @@ function Window:SelectTab(index, instant)
 
         -- 展开动画结束后再同步一次折叠状态（此时行高已稳定）
         task.delay(showDelay + EXPAND_TIME + 0.05, function()
-            if self.Destroyed or self.TabIndex ~= index then return end
+            if self.Destroyed or self._tabGen ~= gen then return end
             for _, r in ipairs(restorers) do
                 if r.apply and r.get then
                     pcall(r.apply, r.get())
