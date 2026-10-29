@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.8.1                                                 ║
+    ║  CDMUI 2.9.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -264,7 +264,7 @@
 
 
 
--- CDMUI v2.8.1  顶栏动画接入面板开关 + 光标缺失修复
+-- CDMUI v2.9.0  顶栏常驻不跟随面板关闭 + 卸载按钮
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -277,7 +277,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.8.1"
+UI.Version = "2.9.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2410,6 +2410,18 @@ local function createTopbarButton(self, labelText)
                         isActive = on and true or false
                         applyVisual()
                     end,
+                    -- 按压反馈（面板关闭时用：轻微缩小回弹，保持可见）
+                    playPress = function()
+                        if not w or not w.Parent then return end
+                        scale.Scale = 1
+                        Anim.to(scale, { Scale = 0.90 }, 0.09,
+                            Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                        task.delay(0.09, function()
+                            if not w or not w.Parent then return end
+                            Anim.to(scale, { Scale = 1 }, 0.24,
+                                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                        end)
+                    end,
                     -- 入场动画（重播，面板打开时调用）
                     playEnter = function()
                         if not w or not w.Parent then return end
@@ -3040,6 +3052,60 @@ function UI.Create(opts)
         TextSize = LAYOUT.titleSize,
         ZIndex = 3,
     }, panel)
+
+    -- ============================================================
+    -- 卸载按钮（大标题右侧）
+    --   顶栏按钮是常驻的，面板开关不影响它。
+    --   真正要退出脚本时点这个，会播出场动画然后销毁。
+    -- ============================================================
+    local unloadBtnW = IS_MOBILE and 76 or 68
+    local unloadBtnH = IS_MOBILE and 34 or 30
+    local unloadBtn = mk("TextButton", {
+        Name = "UnloadBtn",
+        Size = UDim2.fromOffset(unloadBtnW, unloadBtnH),
+        Position = UDim2.new(1, -unloadBtnW - 16, 0, 8 + (56 - unloadBtnH) / 2),
+        BackgroundColor3 = Color3.fromRGB(42, 26, 30),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        Text = "卸载",
+        TextColor3 = Color3.fromRGB(232, 108, 108),
+        Font = FONT_BOLD,
+        TextSize = IS_MOBILE and 15 or 13,
+        AutoButtonColor = false,
+        ZIndex = 6,
+        Active = true,
+    }, panel)
+    corner(unloadBtn, 6)
+    local unloadStroke = stroke(unloadBtn, Color3.fromRGB(120, 56, 60), 1, 0.4)
+
+    local unloadHover = false
+    local function unloadVisual()
+        pcall(function()
+            Anim.to(unloadBtn, {
+                BackgroundColor3 = unloadHover and Color3.fromRGB(64, 32, 38)
+                    or Color3.fromRGB(42, 26, 30),
+            }, 0.12)
+        end)
+    end
+    unloadBtn.MouseEnter:Connect(function() unloadHover = true; unloadVisual() end)
+    unloadBtn.MouseLeave:Connect(function() unloadHover = false; unloadVisual() end)
+
+    bindTap(unloadBtn, function()
+        playClick()
+        -- 二次确认，防止误触
+        UI.Dialog({
+            Title = "确认卸载",
+            Text = "卸载后所有功能会立即关闭，\n需要重新执行脚本才能恢复。",
+            Buttons = {
+                { Text = "取消" },
+                { Text = "卸载", Callback = function()
+                    pcall(function() self:Destroy() end)
+                end },
+            },
+        })
+    end)
+
+    self.UnloadBtn = unloadBtn
 
     -- Tab 栏
     local tabBar = mk("ScrollingFrame", {
@@ -4990,10 +5056,10 @@ function Window:SetVisible(visible, instant)
         panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
         if self.Scale then self.Scale.Scale = self.BaseScale or 1 end
 
-        -- 顶栏播入场动画（和主UI同步）
-        if self._topbarMainBtn and self._topbarMainBtn.playEnter and not instant then
+        -- 顶栏：面板打开时只做轻微放大反馈（不从 0.3 重播入场）
+        if self._topbarMainBtn and self._topbarMainBtn.playPress and not instant then
             task.spawn(function()
-                pcall(function() self._topbarMainBtn.playEnter() end)
+                pcall(function() self._topbarMainBtn.playPress() end)
             end)
         end
 
@@ -5114,10 +5180,16 @@ function Window:SetVisible(visible, instant)
         end
 
     else
-        -- 顶栏播出场动画（和主UI同步）
-        if self._topbarMainBtn and self._topbarMainBtn.playExit and not instant then
+        -- ============================================================
+        -- 顶栏：面板关闭时【不能消失】
+        --   顶栏按钮是常驻的，面板关了它还得留在屏幕上，
+        --   否则用户没法再点它把面板打开。
+        --   这里只做一个「轻微下沉 + 回弹」的反馈，不做缩放淡出。
+        --   playExit（缩到 0.3 + 全透明）只在卸载时用。
+        -- ============================================================
+        if self._topbarMainBtn and self._topbarMainBtn.playPress and not instant then
             task.spawn(function()
-                pcall(function() self._topbarMainBtn.playExit() end)
+                pcall(function() self._topbarMainBtn.playPress() end)
             end)
         end
 
