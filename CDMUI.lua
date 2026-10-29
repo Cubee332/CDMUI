@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.9                                                 ║
+    ║  CDMUI 2.7.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.9  子项悬浮高亮微调（主行的一半）
+-- CDMUI v2.7.0  无 TopbarStandard 时自建顶栏系统
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.9"
+UI.Version = "2.7.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -2021,10 +2021,183 @@ local function createTopbarButton(self, labelText)
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
     if not playerGui then return end
 
-    local topbar = playerGui:FindFirstChild("TopbarStandard")
-    local holders = topbar and topbar:FindFirstChild("Holders")
-    local left = holders and holders:FindFirstChild("Left")
-    if not left then return end
+    -- 顶栏结构在不同游戏里可能不一样，这里做多路径探测
+    --   标准：PlayerGui.TopbarStandard.Holders.Left
+    --   兼容：PlayerGui.TopbarStandard.Holders.Right
+    --   兜底：等 TopbarStandard 出现（有些游戏延迟创建）
+    local function findLeft()
+        local topbar = playerGui:FindFirstChild("TopbarStandard")
+        if not topbar then return nil end
+        local holders = topbar:FindFirstChild("Holders")
+        if not holders then return nil end
+        return holders:FindFirstChild("Left") or holders:FindFirstChild("Right")
+    end
+
+    local left = findLeft()
+    if not left then
+        -- 有些游戏没有 TopbarStandard（自绘 UI 的游戏）
+        --   这时创建一个独立的浮动按钮，固定在左上角
+        -- ============================================================
+        -- 自建顶栏系统（游戏没有 TopbarStandard 时使用）
+        --   做成一条横向的按钮条，样式贴近游戏自带顶栏：
+        --     · 深色圆角胶囊按钮
+        --     · 悬停变亮
+        --     · 支持后续往里面追加更多按钮（通过 CDMUI.AddTopbarButton）
+        -- ============================================================
+        local function makeFloatButton()
+            local oldGui = playerGui:FindFirstChild("CDMUIWidget")
+            if oldGui then pcall(function() oldGui:Destroy() end) end
+
+            local holder = mk("ScreenGui", {
+                Name = "CDMUIWidget",
+                ResetOnSpawn = false,
+                -- 关掉 IgnoreGuiInset：坐标从内容区左上角算，
+                --   这样 (12,8) 就是 Roblox 顶栏下方的可见区域
+                IgnoreGuiInset = false,
+                DisplayOrder = 200,
+                ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+            }, playerGui)
+
+            -- 顶栏容器（横向排列，可扩展）
+            -- 位置：IgnoreGuiInset=true 时 (0,0) 是屏幕物理左上角，
+            --   要避开 Roblox 顶栏，往下偏 8px 并留出安全距离
+            local bar = mk("Frame", {
+                Name = "TopbarBar",
+                Size = UDim2.fromOffset(90, 34),
+                Position = UDim2.fromOffset(12, 8),
+                BackgroundTransparency = 1,
+                BorderSizePixel = 0,
+                ZIndex = 2,
+            }, holder)
+            mk("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                Padding = UDim.new(0, 6),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+            }, bar)
+
+            -- 主按钮
+            local btn = mk("TextButton", {
+                Name = "MainBtn",
+                Size = UDim2.fromOffset(72, 32),
+                BackgroundColor3 = Color3.fromRGB(22, 22, 28),
+                BackgroundTransparency = 0.1,
+                BorderSizePixel = 0,
+                Text = labelText or "菜单",
+                TextColor3 = Color3.fromRGB(232, 232, 240),
+                Font = FONT_BOLD,
+                TextSize = 14,
+                AutoButtonColor = false,
+                LayoutOrder = 1,
+                ZIndex = 3,
+            }, bar)
+            corner(btn, 8)
+            local st2 = stroke(btn, Color3.fromRGB(70, 70, 85), 1, 0.35)
+
+            local hovering = false
+            local function refresh()
+                Anim.to(btn, {
+                    BackgroundColor3 = hovering and Color3.fromRGB(42, 42, 52)
+                        or Color3.fromRGB(22, 22, 28),
+                }, 0.12)
+            end
+            btn.MouseEnter:Connect(function() hovering = true; refresh() end)
+            btn.MouseLeave:Connect(function() hovering = false; refresh() end)
+
+            local lastClick = 0
+            btn.Activated:Connect(function()
+                local now = os.clock()
+                if now - lastClick < 0.3 then return end
+                lastClick = now
+                if self.Busy then return end
+                playClick()
+                if self.Visible then self._closedByTopbar = true end
+                self:SetVisible(not self.Visible)
+            end)
+
+            -- 自适应宽度
+            local function relayout()
+                local w = 0
+                local n = 0
+                for _, c in ipairs(bar:GetChildren()) do
+                    if c:IsA("GuiObject") then
+                        w = w + c.Size.X.Offset
+                        n = n + 1
+                    end
+                end
+                w = w + math.max(0, n - 1) * 6
+                bar.Size = UDim2.fromOffset(math.max(72, w), 34)
+            end
+            relayout()
+
+            self.TopbarButton = holder
+            self._topbarBar = bar
+            self._topbarRelayout = relayout
+
+            -- 导出：外部可以往自建顶栏追加按钮
+            if not UI.AddTopbarButton then
+                function UI.AddTopbarButton(win, text, onClick)
+                    local b = win._topbarBar
+                    if not b or not b.Parent then return nil end
+                    local order = 2
+                    for _, c in ipairs(b:GetChildren()) do
+                        if c:IsA("GuiObject") then order = order + 1 end
+                    end
+                    local nb = mk("TextButton", {
+                        Name = "Btn_" .. tostring(order),
+                        Size = UDim2.fromOffset(72, 32),
+                        BackgroundColor3 = Color3.fromRGB(22, 22, 28),
+                        BackgroundTransparency = 0.1,
+                        BorderSizePixel = 0,
+                        Text = text,
+                        TextColor3 = Color3.fromRGB(232, 232, 240),
+                        Font = FONT_BOLD,
+                        TextSize = 14,
+                        AutoButtonColor = false,
+                        LayoutOrder = order,
+                        ZIndex = 3,
+                    }, b)
+                    corner(nb, 8)
+                    stroke(nb, Color3.fromRGB(70, 70, 85), 1, 0.35)
+                    local hv = false
+                    nb.MouseEnter:Connect(function()
+                        hv = true
+                        Anim.to(nb, { BackgroundColor3 = Color3.fromRGB(42, 42, 52) }, 0.12)
+                    end)
+                    nb.MouseLeave:Connect(function()
+                        hv = false
+                        Anim.to(nb, { BackgroundColor3 = Color3.fromRGB(22, 22, 28) }, 0.12)
+                    end)
+                    nb.Activated:Connect(function()
+                        playClick()
+                        if type(onClick) == "function" then pcall(onClick) end
+                    end)
+                    if win._topbarRelayout then pcall(win._topbarRelayout) end
+                    return nb
+                end
+            end
+
+            return holder
+        end
+
+        -- 先等一下，看是不是顶栏延迟创建
+        task.spawn(function()
+            for _ = 1, 20 do
+                task.wait(0.25)
+                if self.Destroyed then return end
+                local l = findLeft()
+                if l then
+                    pcall(createTopbarButton, self, labelText)
+                    return
+                end
+            end
+            -- 5 秒后还是没有 → 用浮动按钮
+            if not self.Destroyed then
+                pcall(makeFloatButton)
+            end
+        end)
+        return
+    end
 
     local text = labelText or "控制面板"
 
