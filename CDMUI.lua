@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.0                                                 ║
+    ║  CDMUI 2.6.1                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.0  切页改为左右滑动，支持中途接续
+-- CDMUI v2.6.1  修复切页后页面永久隐藏
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.0"
+UI.Version = "2.6.1"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4714,6 +4714,19 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
     self._pageTargets = self._pageTargets or {}
     local tg = self._pageTargets
 
+    -- 先把所有页恢复可见（被隐藏过的页必须重新显示，否则永远不出现）
+    for i, tt in ipairs(self.Tabs) do
+        local pg = tt.Page
+        if pg then
+            if i == activeIndex then
+                pg.Visible = true
+            elseif math.abs(pg.Position.X.Offset) < (vpW * 0.9) then
+                -- 离视口还不远的（正在动画中）：保持可见，让滑出动画能看见
+                pg.Visible = true
+            end
+        end
+    end
+
     -- 新页：如果它正静止在屏幕中央（上一轮已完全结束），
     -- 就把它摆到滑入起点，这样才有「滑入」效果。
     -- 如果它还在动画中（位置不为 0），保持原样直接接续。
@@ -4722,7 +4735,6 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
         local cur = activePg.Position.X.Offset
         local inTransit = tg[activePg] ~= nil and math.abs(cur) > 2
         if not inTransit and math.abs(cur) <= 2 then
-            -- 静止在中央：拉到滑入起点
             activePg.Position = UDim2.new(0, dir * (vpW + 24), 0, 0)
         end
         activePg.Visible = true
@@ -4760,11 +4772,10 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
                 local cur = pg.Position.X.Offset
                 local diff = tgt - cur
                 if math.abs(diff) < 1 then
-                    if math.abs(diff) > 0.01 then
-                        pg.Position = UDim2.new(0, tgt, 0, 0)
-                    end
+                    pg.Position = UDim2.new(0, tgt, 0, 0)
                     tg[pg] = nil
                     -- 滑到屏幕外就隐藏，省渲染
+                    --   位置保持在屏幕外（明确状态），下次切回会重新摆到滑入起点
                     if math.abs(tgt) > 10 then
                         pg.Visible = false
                     end
