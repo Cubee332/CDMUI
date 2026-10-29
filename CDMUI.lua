@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.5                                                 ║
+    ║  CDMUI 2.6.6                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.5  修复滚动到底部后重开会被上拉
+-- CDMUI v2.6.6  优化主面板入场/出场动画，淡入淡出更自然
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.5"
+UI.Version = "2.6.6"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4292,9 +4292,12 @@ function Window:SetVisible(visible, instant)
 
     local BASE_TRANS = 0.05
 
-    -- 面板里的内容行（Tab 栏 + 滚动区）
+    -- 面板里的内容行（标题 + Tab 栏 + 滚动区）
+    --   注意 self.Title 是字符串，实际的标题控件要按名字找
     local function contentParts()
         local parts = {}
+        local titleLbl = self.Panel and self.Panel:FindFirstChild("BigTitle")
+        if titleLbl then table.insert(parts, titleLbl) end
         if self.TabBar then table.insert(parts, self.TabBar) end
         if self.List then table.insert(parts, self.List) end
         return parts
@@ -4393,35 +4396,46 @@ function Window:SetVisible(visible, instant)
         -- 恢复当前页滚动位置（等面板动画开始后再恢复，避免被布局打断）
         self:_RestorePageScroll()
 
-        -- 起点：稍微缩小、稍微下移
-        panel.Position = UDim2.new(0.5, 0, 0.5, 10)
+        -- ============================================================
+        -- 入场：和出场对称的「浮现」感
+        --   之前起点透明度就是 BASE_TRANS（几乎不透明），
+        --   加上面板突然出现，看起来像"啪"一下蹦出来。
+        --   现在起点更透明、更小，用 Quint Out 平滑浮上来。
+        -- ============================================================
+        panel.Position = UDim2.new(0.5, 0, 0.5, 14)
         panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
-        panel.BackgroundTransparency = BASE_TRANS
-        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.88 end
+        panel.BackgroundTransparency = 0.55
+        if self.Scale then self.Scale.Scale = (self.BaseScale or 1) * 0.90 end
 
-        -- 面板：弹性放大（Back 过冲）
-        Anim.to(panel, { Position = UDim2.new(0.5, 0, 0.5, 10) }, 0.34,
-            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-        if self.Scale then Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.42,
-            Enum.EasingStyle.Back, Enum.EasingDirection.Out) end
+        -- 面板：上浮 + 淡入（同时进行，0.28s）
+        Anim.to(panel, {
+            Position = UDim2.new(0.5, 0, 0.5, 10),
+            BackgroundTransparency = BASE_TRANS,
+        }, 0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 
-        -- 内容：上移 + 淡入，依次错开
+        -- 缩放：轻微弹性回弹（Back Out，末尾有过冲）
+        if self.Scale then
+            Anim.to(self.Scale, { Scale = self.BaseScale or 1 }, 0.38,
+                Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end
+
+        -- 内容：从下方 12px 上浮 + 淡入，依次错开
         local parts = contentParts()
-        local delay = 0.08
+        local delay = 0.10
         for _, w in ipairs(parts) do
             if not w:GetAttribute("__basePos") then
                 w:SetAttribute("__basePos", w.Position)
             end
             local base = w:GetAttribute("__basePos")
             w.Position = UDim2.new(base.X.Scale, base.X.Offset,
-                                   base.Y.Scale, base.Y.Offset + 14)
-            w.BackgroundTransparency = math.min(1, (w:GetAttribute("__baseTrans") or 0) + 0.6)
+                                   base.Y.Scale, base.Y.Offset + 12)
+            w.BackgroundTransparency = 1
 
             Anim.to(w, {
                 Position = base,
                 BackgroundTransparency = w:GetAttribute("__baseTrans") or 0,
             }, 0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, delay)
-            delay = delay + 0.06
+            delay = delay + 0.055
         end
 
     else
@@ -4433,27 +4447,39 @@ function Window:SetVisible(visible, instant)
             return
         end
 
-        -- 收起：缩小 + 下沉 + 淡出
+        -- ============================================================
+        -- 出场：三段时间轴，互相重叠，最后整体淡出
+        --   之前 0.16s 缩到 0.94 就硬切 Visible，看起来像"啪"一下没了。
+        --   现在：
+        --     ① 内容先轻微下沉淡出（0.18s）
+        --     ② 面板同步缩小 + 下沉（0.26s，比内容慢一拍）
+        --     ③ 面板整体透明度淡出（0.22s，延迟 0.06s 启动）
+        --   总时长 0.30s，收尾平滑
+        -- ============================================================
         local parts = contentParts()
         for i, w in ipairs(parts) do
             local base = w:GetAttribute("__basePos") or w.Position
             Anim.to(w, {
                 Position = UDim2.new(base.X.Scale, base.X.Offset,
-                                     base.Y.Scale, base.Y.Offset + 8),
+                                     base.Y.Scale, base.Y.Offset + 10),
                 BackgroundTransparency = 1,
-            }, 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
-                (i - 1) * 0.02)
+            }, 0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In,
+                (i - 1) * 0.025)
         end
 
+        -- 面板缩小（Back In 有轻微"被吸走"的感觉）
         if self.Scale then
-            Anim.to(self.Scale, { Scale = (self.BaseScale or 1) * 0.94 }, 0.16,
-                Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            Anim.to(self.Scale, { Scale = (self.BaseScale or 1) * 0.90 }, 0.26,
+                Enum.EasingStyle.Back, Enum.EasingDirection.In)
         end
-        Anim.to(panel, {
-            Position = UDim2.new(0.5, 0, 0.5, 8),
-        }, 0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
-        task.delay(0.17, function()
+        -- 面板下沉 + 淡出
+        Anim.to(panel, {
+            Position = UDim2.new(0.5, 0, 0.5, 14),
+            BackgroundTransparency = 0.75,
+        }, 0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+        task.delay(0.30, function()
             if not self.Visible and self.Gui then
                 self.Gui.Enabled = false
                 if self.Panel then self.Panel.Visible = false end
