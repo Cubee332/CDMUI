@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.6                                                 ║
+    ║  CDMUI 2.6.7                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.6  点击音效复用单实例，修复叠音
+-- CDMUI v2.6.7  修复功能栏拖动失效（每个 Page 补挂惯性）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.6"
+UI.Version = "2.6.7"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4544,6 +4544,15 @@ function Window:Tab(name)
     tab.Container = page
     tab.Page = page
     page:SetAttribute("__pageIndex", tabIndex)
+
+    -- 给这个 Page 挂上拖动/惯性
+    --   改成每 Tab 独立容器后，真正的滚动主体是 Page 而不是 self.List，
+    --   之前只给 self.List 挂过，所以拖不动。
+    tab.PageInertia = attachInertia(page, {
+        axis = "Y",
+        excludeRects = { self.TabBar },
+        onScroll = function() refreshHover(page) end,
+    })
 
     -- Tab 按钮：等分整行，不依赖固定宽度（Tab 数量变化也不会错位）
     local btn = mk("TextButton", {
