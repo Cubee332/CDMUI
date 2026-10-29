@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.3.7                                                 ║
+    ║  CDMUI 2.4.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.3.7  修复快速切页导致动画被跳过
+-- CDMUI v2.4.0  重写 SelectTab：去掉高度动画，彻底消除快速切页错乱
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.3.7"
+UI.Version = "2.4.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4662,39 +4662,23 @@ function Window:SelectTab(index, instant)
     if not tab then return end
     local last = self.TabIndex
 
-    -- 切页代数：每次切页自增
-    --   快速连续切页时，上一轮的动画可能还在跑（task.delay / Anim.to），
-    --   它们会和新一轮抢同一个属性，导致「动画被跳过」「行高错乱」。
-    --   所有异步回调都要校验代数，不匹配就直接放弃。
-    self._tabGen = (self._tabGen or 0) + 1
-    local gen = self._tabGen
-
-    -- 立即把所有行的 Size 动画停掉，落回确定状态
-    --   不做这一步的话，旧动画会在新页展开时继续写 Size
-    --   （快速切页时表现为「动画被跳过」或行高错乱）
-    for _, tt in ipairs(self.Tabs) do
-        for _, w in ipairs(tt.Widgets) do
-            if w and w.Parent then
-                pcall(function() Anim.cancel(w, { "Size", "BackgroundTransparency" }) end)
-            end
-        end
-    end
+    -- 切页 token：每次切页自增，旧回调看到 token 变了就立刻放弃
+    --   这是唯一可靠的取消机制（Anim.cancel + 代数校验都不够稳）
+    self._tabToken = (self._tabToken or 0) + 1
+    local token = self._tabToken
 
     self.TabIndex = index
-
-    -- Tab 宽度重算，避免被别处覆盖
     self:LayoutTabs()
 
-    -- Tab 按钮状态
-    for i, t in ipairs(self.Tabs) do
+    -- Tab 按钮高亮
+    for i, tt in ipairs(self.Tabs) do
         local active = (i == index)
-        tween(t.Button, 0.18, {
+        tween(tt.Button, 0.18, {
             BackgroundColor3 = active and T.tabActive or T.tabIdle,
             TextColor3 = active and T.tabTextOn or T.tabText,
         }, Enum.EasingStyle.Quad)
     end
 
-    -- 让选中的 Tab 平滑滚到可视区中间
     if self._ScrollTabIntoView then
         task.defer(function()
             if self.Destroyed then return end
@@ -4702,276 +4686,85 @@ function Window:SelectTab(index, instant)
         end)
     end
 
-    -- 记录行原始高度
-    local function rememberBase(w)
-        if not w:GetAttribute("__baseH") or w:GetAttribute("__baseH") <= 0 then
-            w:SetAttribute("__baseH", w.Size.Y.Offset)
-        end
-        return w:GetAttribute("__baseH")
-    end
-
-    -- 整页切换到 显示/隐藏 状态
-    --   collapseToZero: true 时只设 Visible，高度由调用方用动画撑开
-    --   （避免「Visible=true 同时高度=base」造成的突然出现）
-    local function setPage(t, visible, collapseToZero)
-        for _, w in ipairs(t.Widgets) do
-            -- BodyChildRow 自己管理显隐，不能被切页重置
-            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                local base = rememberBase(w)
-                w.Visible = visible
-                if visible and collapseToZero then
-                    -- 交给后面的展开动画
-                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                else
-                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, visible and base or 0)
-                end
-                -- 恢复该行的原始透明度
-                --   不能写死 0.15：SectionRow 本来是全透明（1），
-                --   写死会让它变成半透明白底（切页后看到一片白条）
-                local origT = w:GetAttribute("__origBgTrans")
-                if origT == nil then
-                    -- 首次记录：用当前值作为基准
-                    origT = w.BackgroundTransparency
-                    w:SetAttribute("__origBgTrans", origT)
-                end
-                w.BackgroundTransparency = origT
-            end
-        end
-        -- 子行：当前页按展开状态恢复，非当前页一律立即隐藏（不占位）
-        for _, r in ipairs(self.ExpandRestorers) do
-            if r.tab == t and r.apply then
-                if visible then
-                    r.apply(r.get() == true, false)
-                else
-                    r.apply(false, false)
-                end
-            end
-        end
-
-        -- 兜底：再扫一遍 BodyChildRow，确保 Visible 跟展开状态一致
-        for _, w in ipairs(t.Widgets) do
-            if w and w.Parent and w.Name == "BodyChildRow" then
-                local ek = w:GetAttribute("__expandKey")
-                local open = (ek ~= nil) and (self.State[ek] == true)
-                local h = w:GetAttribute("__h") or 0
-                if visible == true and open then
-                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, h)
-                    w.Visible = true
-                else
-                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                    w.Visible = false
-                end
-            end
-        end
-    end
-
-    local oldTab = self.Tabs[last]
-
-    -- 首次 / 瞬间切换：直接完成
-    -- 判断当前页的行是否「已经稳定在完整高度」
-    --   快速切页（人物→枪械→人物）时，第三下 last==index，
-    --   但上一轮动画可能还没把行撑回原高。
-    --   这时候如果直接 setPage（无动画），就会看到「动画被跳过」。
-    local function rowsAreSettled(idx)
-        local tt = self.Tabs[idx]
-        if not tt then return true end
-        local checked = 0
+    -- ============================================================
+    -- 核心：把所有行设到确定状态
+    --   不做高度动画。原因：
+    --     · 高度动画会被 UIListLayout 重算打断，出现重叠
+    --     · 快速切页时多个动画抢同一属性，必然错乱
+    --   改用「立即落终态 + 只对透明度做动画」，
+    --   视觉上是淡入淡出，但布局永远正确。
+    -- ============================================================
+    local function applyTab(tt, visible)
         for _, w in ipairs(tt.Widgets) do
-            if w and w.Parent and w.Name == "Row" then
-                local base = w:GetAttribute("__baseH") or 0
-                if base > 0 then
-                    checked = checked + 1
-                    -- 差超过 3px 就认为还没稳定
-                    if math.abs(w.Size.Y.Offset - base) > 3 then
-                        return false
+            if w and w.Parent then
+                if w.Name == "ChildRow" or w.Name == "BodyChildRow" then
+                    -- 子行由 ExpandRestorers 处理
+                elseif w.Name == "SectionRow" then
+                    -- Section 是全透明标题，只控制显隐
+                    w.Visible = visible
+                else
+                    local base = w:GetAttribute("__baseH")
+                    if not base or base <= 0 then
+                        base = w.Size.Y.Offset
+                        if base > 0 then w:SetAttribute("__baseH", base) end
                     end
+                    w.Visible = visible
+                    -- 高度直接落终态，永不做动画
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0,
+                        visible and (base or 0) or 0)
                 end
             end
         end
-        return checked == 0 or true
-    end
-
-    if instant or (last == index and rowsAreSettled(index)) or not oldTab then
-        local sameTab = (last == index)
-        for i, t in ipairs(self.Tabs) do
-            setPage(t, i == index)
-        end
-
-        if sameTab and not instant then
-            -- 重复点同一个 Tab：平滑滚回顶部，别瞬移
-            self:_ScrollToTop(0.34)
-        else
-            self.List.CanvasPosition = Vector2.new(0, 0)
-        end
-        -- 切页后清掉悬停残留（和入场动画结束时同样处理）
-        task.defer(function()
-            if not self.Destroyed then
-                pcall(function() self:_ResetAllRowHover() end)
-            end
-        end)
-        return
-    end
-
-    -- 走到这里说明：要么是切到别的页，要么是「切回同一页但行还没稳定」
-    --   后者也要走动画，否则会看到跳变
-    if last == index then
-        -- 切回同一页但没稳定：把行从当前高度动画回原高
-        local sameTab = self.Tabs[index]
-        local delay = 0
-        for _, w in ipairs(sameTab.Widgets) do
-            if w and w.Parent and w.Name == "Row" then
-                local base = w:GetAttribute("__baseH") or 0
-                if base > 0 then
-                    w.Visible = true
-                    Anim.to(w, {
-                        Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base),
-                    }, 0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, delay)
-                    delay = delay + 0.005
-                end
-            end
-        end
-        pcall(function() self:_ResetAllRowHover() end)
-        return
-    end
-
-    -- 换页动画参数
-    --   旧版 0.10/0.16 + Quad In，收得太急，末尾像被"掐断"，
-    --   而且旧页一隐藏新页立刻从 0 冒出来，中间没有任何过渡。
-    --   现在改成：
-    --     · 收起用 Quint In（加速下落，观感是"被吸走"而不是"卡住"）
-    --     · 收起 0.16s，展开 0.26s，两者时间重叠更多
-    --     · 错开量调小，整页像一条流水而不是逐行蹦出来
-    local COLLAPSE_TIME = 0.16
-    local EXPAND_TIME = 0.26
-    local STAGGER_OUT = 0.003
-    local STAGGER_IN = 0.005
-
-    -- 收集旧页可见行
-    local oldRows = {}
-    for _, w in ipairs(oldTab.Widgets) do
-        if w and w.Parent and w.Visible and w:IsA("Frame") and w.Name ~= "BodyChildRow" then
-            rememberBase(w)
-            table.insert(oldRows, w)
-        end
-    end
-
-    -- 换页动画：滚回顶部 + 收起 + 展开，三者重叠进行。
-    -- 分得太开会有"等一下、再等一下"的顿挫感，所以这里让它们同时跑。
-    local SCROLL_TIME = 0.20
-    local collapseTotal = COLLAPSE_TIME + #oldRows * STAGGER_OUT
-
-    -- ① 滚回顶部（同时进行）
-    self:_ScrollToTop(SCROLL_TIME)
-
-    -- ② 收起几乎同时开始，不等滚动停
-    task.delay(0.02, function()
-        if self.Destroyed or self._tabGen ~= gen then return end
-
-        for idx, w in ipairs(oldRows) do
-            local fromBottom = (#oldRows - idx) * STAGGER_OUT
-            -- Quint In：起步慢、末尾快，像被"吸走"，不会在结束瞬间掐断
-            --   淡出目标基于该行原始透明度，避免全透明的行被改成半透明
-            local origT = w:GetAttribute("__origBgTrans")
-            if origT == nil then
-                origT = w.BackgroundTransparency
-                w:SetAttribute("__origBgTrans", origT)
-            end
-            local fadeTo = math.min(1, origT + 0.5)
-            Anim.to(w, {
-                Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0),
-                BackgroundTransparency = fadeTo,
-            }, COLLAPSE_TIME, Enum.EasingStyle.Quint, Enum.EasingDirection.In, fromBottom)
-        end
-
-        -- ③ 收起过半就开始展开，收尾和起头叠在一起
-        --   关键改动：不再「旧页隐藏 → 新页出现」的硬切换，
-        --   而是让新页在旧页还没完全消失时就开始撑开，
-        --   两边在时间轴上重叠，视觉上是连续流动而不是突然换页。
-        task.delay(collapseTotal * 0.62, function()
-            if self.Destroyed or self._tabGen ~= gen then return end
-            -- 切页开始时先清一次悬停残留，避免旧页的行带着高亮消失
-            pcall(function() self:_ResetAllRowHover() end)
-
-            -- 旧页隐藏
-            --   保护：如果 oldTab 又变回当前页了（用户快速切回），
-            --        不能把它隐藏，否则会出现「切回来了但是空的」
-            local oldIsCurrent = (oldTab == self.Tabs[self.TabIndex])
-            if not oldIsCurrent then
-                for _, w in ipairs(oldTab.Widgets) do
-                    if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                        w.Visible = false
-                    end
-                end
-                for _, r in ipairs(self.ExpandRestorers) do
-                    if r.tab == oldTab and r.apply then r.apply(false, false) end
-                end
-            end
-
-            -- 位置兜底，确保新页从顶部开始
-            self.List.CanvasPosition = Vector2.new(0, 0)
-
-        -- 新页：统一走 setPage（和 instant 分支共用同一套逻辑，
-        -- 避免「改一处忘另一处」）。先把高度归 0，再由下面的动画撑开。
-        setPage(tab, true, true)
-
-        local newRows = {}
-        for _, w in ipairs(tab.Widgets) do
-            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                local base = rememberBase(w)
-                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                table.insert(newRows, w)
-            end
-        end
-
-        -- 主行按顺序撑开；展开中的子行紧跟在各自父行之后开始，
-        -- 形成「主行 -> 子行」连贯的展开流
-        local restorers = {}
+        -- 子行按展开状态恢复
         for _, r in ipairs(self.ExpandRestorers) do
-            if r.tab == tab then
-                table.insert(restorers, r)
+            if r.tab == tt and r.apply then
+                pcall(r.apply, visible and r.get() == true or false, false)
             end
         end
+    end
 
-        local showDelay = 0
-        for idx, w in ipairs(newRows) do
-            local base = w:GetAttribute("__baseH") or 0
-            -- 从透明开始，边撑开边淡入
-            local origT2 = w:GetAttribute("__origBgTrans")
-            if origT2 == nil then
-                origT2 = w.BackgroundTransparency
-                w:SetAttribute("__origBgTrans", origT2)
-            end
-            pcall(function() w.BackgroundTransparency = 1 end)
-            Anim.to(w, {
-                Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base),
-                BackgroundTransparency = origT2,
-            }, EXPAND_TIME, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, showDelay)
-
-            showDelay = showDelay + STAGGER_IN
-
-            -- 这一行如果有展开项且处于展开状态，让它比主行晚 0.06s 开始撑开
-            local title = w:FindFirstChild("Title")
-            if title then
-                for _, r in ipairs(restorers) do
-                    if r.get() == true and r.apply and r.panelRow == w then
-                        r.apply(true, true, showDelay + 0.06)
-                    end
-                end
-            end
+    -- 所有非当前页：立即隐藏（保证布局干净）
+    for i, tt in ipairs(self.Tabs) do
+        if i ~= index then
+            applyTab(tt, false)
         end
+    end
 
-        -- 展开动画结束后再同步一次折叠状态（此时行高已稳定）
-        task.delay(showDelay + EXPAND_TIME + 0.05, function()
-            if self.Destroyed or self._tabGen ~= gen then return end
-            for _, r in ipairs(restorers) do
-                if r.apply and r.get then
-                    pcall(r.apply, r.get())
-                end
-            end
-        end)
-        end)
+    -- 当前页：显示
+    applyTab(tab, true)
+
+    -- 滚动位置
+    if last == index and not instant then
+        self:_ScrollToTop(0.34)
+    else
+        self.List.CanvasPosition = Vector2.new(0, 0)
+    end
+
+    -- 悬停状态清理
+    task.defer(function()
+        if not self.Destroyed then
+            pcall(function() self:_ResetAllRowHover() end)
+        end
     end)
+
+    -- 淡入动画：只改透明度，不改尺寸
+    --   这样布局绝对正确，视觉上也有过渡
+    if not instant then
+        local delay = 0
+        for _, w in ipairs(tab.Widgets) do
+            if w and w.Parent and w.Name == "Row" then
+                local origT = w:GetAttribute("__origBgTrans")
+                if origT == nil then origT = 0.15 end
+                w.BackgroundTransparency = 1
+                Anim.to(w, { BackgroundTransparency = origT }, 0.22,
+                    Enum.EasingStyle.Quad, Enum.EasingDirection.Out, delay)
+                delay = delay + 0.006
+                if delay > 0.12 then delay = 0.12 end
+            end
+        end
+    end
 end
+
 function Window:Notify(text, duration)
     if self.Destroyed then return end
     duration = duration or 2.4
