@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.7                                                 ║
+    ║  CDMUI 2.6.8                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.7  修复功能栏拖动失效（每个 Page 补挂惯性）
+-- CDMUI v2.6.8  子项悬浮高亮加强（颜色变化）
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.7"
+UI.Version = "2.6.8"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -488,7 +488,7 @@ local T = {
     row         = Color3.fromRGB(25, 25, 30),
     rowHover    = Color3.fromRGB(34, 34, 41),
     rowChild    = Color3.fromRGB(21, 21, 26),
-    childHover  = Color3.fromRGB(30, 30, 36),
+    childHover  = Color3.fromRGB(44, 44, 54),
 
     -- 文字
     text        = Color3.fromRGB(240, 240, 245),
@@ -6009,7 +6009,9 @@ function Tab:Expand(cfg)
             ClipsDescendants = true,
             Visible = false,
             ZIndex = 4,
-            Active = false,
+            -- 必须 Active：Frame 不 Active 收不到 MouseEnter/MouseLeave，
+            --   之前子行悬停不明显，一部分原因就是事件压根没触发
+            Active = true,
         }, self.Container)
         corner(ch, SIZE.radius)
         table.insert(self.Widgets, ch)
@@ -6026,25 +6028,35 @@ function Tab:Expand(cfg)
         }, ch)
         corner(bar, 1)
 
-        -- 子项悬浮高亮：和主行同一套做法（鼠标移上来整行变亮）
+        -- 子项悬浮高亮：和主行同一套做法
+        --   之前只改 BackgroundTransparency（0.15 → 0.07），亮度差太小几乎看不出来。
+        --   改成换颜色：rowChild → childHover，色差明显，和主行观感一致。
         do
+            local baseColor = ch.BackgroundColor3
             local baseTrans = ch.BackgroundTransparency
-            local hoverTrans = math.max(0, baseTrans - 0.08)
             local hovered = false
             ch.MouseEnter:Connect(function()
                 hovered = true
-                tween(ch, 0.12, { BackgroundTransparency = hoverTrans })
+                tween(ch, 0.12, {
+                    BackgroundColor3 = T.childHover,
+                    BackgroundTransparency = math.max(0, baseTrans - 0.06),
+                })
             end)
             ch.MouseLeave:Connect(function()
                 hovered = false
-                tween(ch, 0.12, { BackgroundTransparency = baseTrans })
+                tween(ch, 0.12, {
+                    BackgroundColor3 = baseColor,
+                    BackgroundTransparency = baseTrans,
+                })
             end)
             -- 滚动时鼠标不动也要更新（和主行一致）
             if _G.__CDMUIHoverFns then
                 _G.__CDMUIHoverFns[ch] = function()
                     if hovered then
-                        ch.BackgroundTransparency = hoverTrans
+                        ch.BackgroundColor3 = T.childHover
+                        ch.BackgroundTransparency = math.max(0, baseTrans - 0.06)
                     else
+                        ch.BackgroundColor3 = baseColor
                         ch.BackgroundTransparency = baseTrans
                     end
                 end
