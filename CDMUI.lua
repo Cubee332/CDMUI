@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.4.2                                                 ║
+    ║  CDMUI 2.5.0                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.4.2  切页两段动画（先收后展）+ 点已激活Tab不重播
+-- CDMUI v2.5.0  切页动画引擎：连续趋近式，支持中途断开接续
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.4.2"
+UI.Version = "2.5.0"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4677,20 +4677,96 @@ function Window:_ScrollToTop(duration)
     end)
 end
 
+-- ============================================================
+-- 行高动画引擎（连续趋近式）
+--   核心思想：不存「起始值 + 目标值 + 起始时刻」，
+--   而是每帧读当前高度，朝目标值插值。
+--   这样中途切换目标时，动画会从当前高度自然接续，
+--   不会跳变、不会重置。
+-- ============================================================
+function Window:_EnsureRowAnimator()
+    if self._rowAnimConn then return end
+
+    -- 每行的目标高度（nil = 不参与动画）
+    local targets = {}
+    local conn
+
+    local function step()
+        if self.Destroyed then
+            if conn then pcall(function() conn:Disconnect() end) end
+            self._rowAnimConn = nil
+            return
+        end
+
+        local busy = false
+        for obj, tgt in pairs(targets) do
+            if not obj or not obj.Parent then
+                targets[obj] = nil
+            else
+                local cur = obj.Size.Y.Offset
+                local diff = tgt - cur
+                if math.abs(diff) < 0.6 then
+                    -- 到位：钉死终值（无条件写，保证精确）
+                    obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, tgt)
+                    targets[obj] = nil
+                else
+                    busy = true
+                    -- 指数趋近：每帧走剩余距离的 28%
+                    local nextH = cur + diff * 0.28
+                    -- 步长下限：避免指数趋近尾部拖太长
+                    local step = math.abs(nextH - cur)
+                    if step < 1.2 then
+                        nextH = cur + (diff > 0 and 1.2 or -1.2)
+                    end
+                    -- 不要越过目标
+                    if (diff > 0 and nextH > tgt) or (diff < 0 and nextH < tgt) then
+                        nextH = tgt
+                    end
+                    obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, nextH)
+                end
+            end
+        end
+
+        if not busy then
+            if conn then pcall(function() conn:Disconnect() end) end
+            self._rowAnimConn = nil
+        end
+    end
+
+    conn = RunService.RenderStepped:Connect(step)
+    self._rowAnimConn = conn
+    self._rowTargets = targets
+end
+
+-- 给某一行设定目标高度（参与连续动画）
+function Window:_SetRowTarget(obj, targetH)
+    if not obj or not obj.Parent then return end
+    self:_EnsureRowAnimator()
+    local targets = self._rowTargets
+    if not targets then return end
+
+    if targetH <= 0.5 then
+        -- 收到底：动画到 0 后隐藏
+        targets[obj] = 0
+        obj.Visible = true
+        obj:SetAttribute("__pendingHide", true)
+    else
+        obj:SetAttribute("__pendingHide", false)
+        obj.Visible = true
+        targets[obj] = targetH
+    end
+end
+
 function Window:SelectTab(index, instant)
     local tab = self.Tabs[index]
     if not tab then return end
     local last = self.TabIndex
 
-    -- 点已激活的 Tab：只滚回顶部，绝不重播展开动画
+    -- 点已激活的 Tab：只滚回顶部，不重播动画
     if last == index and not instant then
         self:_ScrollToTop(0.34)
         return
     end
-
-    -- 切页 token：每次切页自增，旧动画看到 token 变了立刻放弃
-    self._tabToken = (self._tabToken or 0) + 1
-    local token = self._tabToken
 
     self.TabIndex = index
     self:LayoutTabs()
@@ -4711,7 +4787,7 @@ function Window:SelectTab(index, instant)
         end)
     end
 
-    -- 取行的原始高度
+    -- 取原始高度
     local function baseH(w)
         local b = w:GetAttribute("__baseH")
         if not b or b <= 0 then
@@ -4721,146 +4797,115 @@ function Window:SelectTab(index, instant)
         return b or 0
     end
 
-    -- 立即归零并隐藏一整页（瞬时，不走动画）
-    local function hardHide(tt)
-        if not tt then return end
-        for _, w in ipairs(tt.Widgets) do
-            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                w.Visible = false
-                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
+    -- instant 模式：直接落终态，不参与动画
+    if instant then
+        if self._rowTargets then
+            for k in pairs(self._rowTargets) do self._rowTargets[k] = nil end
+        end
+        for i, tt in ipairs(self.Tabs) do
+            local vis = (i == index)
+            for _, w in ipairs(tt.Widgets) do
+                if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                    local b = baseH(w)
+                    w.Visible = vis
+                    w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, vis and b or 0)
+                    w:SetAttribute("__pendingHide", false)
+                end
             end
-        end
-        for _, r in ipairs(self.ExpandRestorers) do
-            if r.tab == tt and r.apply then pcall(r.apply, false, false) end
-        end
-    end
-
-    -- 非当前页、非上一页：瞬时清掉（保证布局干净）
-    for i, tt in ipairs(self.Tabs) do
-        if i ~= index and i ~= last then hardHide(tt) end
-    end
-
-    self.List.CanvasPosition = Vector2.new(0, 0)
-
-    task.defer(function()
-        if not self.Destroyed then
-            pcall(function() self:_ResetAllRowHover() end)
-        end
-    end)
-
-    -- 旧页：收集要收起的行（从当前高度收到 0）
-    local oldTab = self.Tabs[last]
-    local oldRows = {}
-    if oldTab and not instant then
-        for _, w in ipairs(oldTab.Widgets) do
-            if w and w.Parent and w.Visible
-               and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-                local cur = w.Size.Y.Offset
-                if cur > 0.5 then
-                    oldRows[#oldRows + 1] = { obj = w, from = cur }
+            for _, r in ipairs(self.ExpandRestorers) do
+                if r.tab == tt and r.apply then
+                    pcall(r.apply, vis and r.get() == true or false, false)
                 end
             end
         end
-    end
-
-    -- 新页：收集要展开的行（从 0 涨到 base）
-    local newRows = {}
-    for _, w in ipairs(tab.Widgets) do
-        if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
-            local b = baseH(w)
-            w.Visible = true
-            if b > 0 then
-                w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, 0)
-                newRows[#newRows + 1] = { obj = w, base = b }
-            end
-        end
-    end
-
-    -- 子行按展开状态恢复
-    for _, r in ipairs(self.ExpandRestorers) do
-        if r.tab == tab and r.apply then
-            pcall(r.apply, r.get() == true, false)
-        end
-    end
-
-    -- instant / 没有可收起的行：直接落终态
-    if instant or #oldRows == 0 then
-        hardHide(oldTab)
-        for _, it in ipairs(newRows) do
-            if it.obj and it.obj.Parent then
-                it.obj.Size = UDim2.new(it.obj.Size.X.Scale, it.obj.Size.X.Offset, 0, it.base)
-            end
-        end
+        self.List.CanvasPosition = Vector2.new(0, 0)
+        task.defer(function()
+            if not self.Destroyed then pcall(function() self:_ResetAllRowHover() end) end
+        end)
         return
     end
 
     -- ============================================================
-    -- 两段动画：先收旧页，再展新页
-    --   逐帧手写而不是 TweenService：
-    --     token 变化能立刻 return，不留残余写入
+    -- 非 instant：用连续动画
+    --   当前页所有行 → 目标 = baseH（展开）
+    --   其他页所有行 → 目标 = 0（收起）
+    --   中途切页时，行高保持当前值，只是换了个目标，
+    --   动画会从当前高度继续，实现无缝接续
     -- ============================================================
-    local COLLAPSE = 0.15
-    local EXPAND = 0.26
-    local STAGGER_OUT = 0.004
-    local STAGGER_IN = 0.005
-
-    task.spawn(function()
-        -- ① 收起旧页（Quad In：起步慢、末尾快，像被吸走）
-        local t0 = os.clock()
-        while true do
-            if self.Destroyed or self._tabToken ~= token then return end
-            local el = os.clock() - t0
-            local done = true
-            for i, it in ipairs(oldRows) do
-                local lt = (el - (i - 1) * STAGGER_OUT) / COLLAPSE
-                if lt < 1 then done = false end
-                local p
-                if lt <= 0 then p = 0
-                elseif lt >= 1 then p = 1
-                else p = lt * lt end
-                local h = it.from * (1 - p)
-                if it.obj and it.obj.Parent then
-                    it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
-                        it.obj.Size.X.Offset, 0, h)
-                end
-            end
-            if done then break end
-            RunService.RenderStepped:Wait()
-        end
-
-        if self.Destroyed or self._tabToken ~= token then return end
-        hardHide(oldTab)
-
-        -- ② 展开新页（Quart Out：起步快、末尾缓）
-        local t1 = os.clock()
-        while true do
-            if self.Destroyed or self._tabToken ~= token then return end
-            local el = os.clock() - t1
-            local done = true
-            for i, it in ipairs(newRows) do
-                local lt = (el - (i - 1) * STAGGER_IN) / EXPAND
-                if lt < 1 then done = false end
-                local p
-                if lt <= 0 then p = 0
-                elseif lt >= 1 then p = 1
-                else p = 1 - (1 - lt) ^ 3 end
-                local h = it.base * p
-                if it.obj and it.obj.Parent then
-                    it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
-                        it.obj.Size.X.Offset, 0, h)
-                end
-            end
-            if done then
-                for _, it in ipairs(newRows) do
-                    if it.obj and it.obj.Parent then
-                        it.obj.Size = UDim2.new(it.obj.Size.X.Scale,
-                            it.obj.Size.X.Offset, 0, it.base)
+    for i, tt in ipairs(self.Tabs) do
+        local visible = (i == index)
+        for _, w in ipairs(tt.Widgets) do
+            if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                local b = baseH(w)
+                if visible then
+                    -- 当前页：先确保可见，目标 = 原高
+                    w.Visible = true
+                    w:SetAttribute("__pendingHide", false)
+                    self:_SetRowTarget(w, b)
+                else
+                    -- 非当前页：目标 = 0（若已经在 0 且隐藏，跳过）
+                    local cur = w.Size.Y.Offset
+                    if cur > 0.5 or w.Visible then
+                        self:_SetRowTarget(w, 0)
                     end
                 end
-                return
             end
-            RunService.RenderStepped:Wait()
         end
+
+        -- 子行：当前页按展开状态恢复，其他页立即收起
+        for _, r in ipairs(self.ExpandRestorers) do
+            if r.tab == tt and r.apply then
+                if visible then
+                    pcall(r.apply, r.get() == true, false)
+                else
+                    pcall(r.apply, false, false)
+                end
+            end
+        end
+    end
+
+    self.List.CanvasPosition = Vector2.new(0, 0)
+
+    -- 收完的行自动隐藏（等动画结束后检查）
+    task.spawn(function()
+        local deadline = os.clock() + 1.0
+        while os.clock() < deadline do
+            if self.Destroyed then return end
+            local anyPending = false
+            for i, tt in ipairs(self.Tabs) do
+                if i ~= index then
+                    for _, w in ipairs(tt.Widgets) do
+                        if w and w.Parent and w:GetAttribute("__pendingHide") then
+                            if w.Size.Y.Offset <= 0.6 then
+                                w.Visible = false
+                                w:SetAttribute("__pendingHide", false)
+                            else
+                                anyPending = true
+                            end
+                        end
+                    end
+                end
+            end
+            if not anyPending then break end
+            task.wait(0.05)
+        end
+        -- 兜底：确保所有非当前页都隐藏
+        for i, tt in ipairs(self.Tabs) do
+            if i ~= index then
+                for _, w in ipairs(tt.Widgets) do
+                    if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
+                        if w.Size.Y.Offset <= 0.6 then
+                            w.Visible = false
+                            w:SetAttribute("__pendingHide", false)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    task.defer(function()
+        if not self.Destroyed then pcall(function() self:_ResetAllRowHover() end) end
     end)
 end
 
