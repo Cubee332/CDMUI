@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║  CDMUI 2.6.2                                                 ║
+    ║  CDMUI 2.6.3                                                 ║
     ║  Roblox 控制面板 UI 库 · 单文件 · 无依赖 · PC/手机自适应      ║
     ╚══════════════════════════════════════════════════════════════╝
 
@@ -263,7 +263,7 @@
 
 
 
--- CDMUI v2.6.2  修复切页后行全部隐藏（页面空白）
+-- CDMUI v2.6.3  切页改为弹簧动画，旧页内容保持可见
 
 local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
@@ -276,7 +276,7 @@ local Debris = game:GetService("Debris")
 local LocalPlayer = Players.LocalPlayer
 
 local UI = {}
-UI.Version = "2.6.2"
+UI.Version = "2.6.3"
 
 -- 播放退出动画（面板 + 顶栏按钮），不销毁任何东西
 -- 返回一个函数：调用它会等动画播完（yield）
@@ -4711,88 +4711,87 @@ end
 --   中途切页只改目标 → 动画从当前位置接续，不会跳回起点。
 -- ============================================================
 function Window:_SetPageTargets(activeIndex, dir, vpW)
-    self._pageTargets = self._pageTargets or {}
-    local tg = self._pageTargets
+    self._pageAnim = self._pageAnim or {}
 
-    -- 先把所有页恢复可见（被隐藏过的页必须重新显示，否则永远不出现）
+    local anim = self._pageAnim
+
+    -- 初始化每个页的运动状态
     for i, tt in ipairs(self.Tabs) do
         local pg = tt.Page
         if pg then
-            if i == activeIndex then
-                pg.Visible = true
-            elseif math.abs(pg.Position.X.Offset) < (vpW * 0.9) then
-                -- 离视口还不远的（正在动画中）：保持可见，让滑出动画能看见
-                pg.Visible = true
+            local st = anim[pg]
+            if not st then
+                st = { x = pg.Position.X.Offset, v = 0, target = 0 }
+                anim[pg] = st
+            else
+                st.x = pg.Position.X.Offset
             end
-        end
-    end
 
-    -- 新页：如果它正静止在屏幕中央（上一轮已完全结束），
-    -- 就把它摆到滑入起点，这样才有「滑入」效果。
-    -- 如果它还在动画中（位置不为 0），保持原样直接接续。
-    local activePg = self.Tabs[activeIndex] and self.Tabs[activeIndex].Page
-    if activePg then
-        local cur = activePg.Position.X.Offset
-        local inTransit = tg[activePg] ~= nil and math.abs(cur) > 2
-        if not inTransit and math.abs(cur) <= 2 then
-            activePg.Position = UDim2.new(0, dir * (vpW + 24), 0, 0)
-        end
-        activePg.Visible = true
-    end
-
-    for i, tt in ipairs(self.Tabs) do
-        local pg = tt.Page
-        if pg then
             if i == activeIndex then
-                tg[pg] = 0
+                st.target = 0
                 pg.Visible = true
+                -- 新页：如果完全静止在中间，摆到滑入起点
+                if math.abs(st.x) <= 1 and math.abs(st.v) < 1 then
+                    st.x = dir * (vpW + 30)
+                    st.v = 0
+                    pg.Position = UDim2.new(0, st.x, 0, 0)
+                end
             else
                 local side = (i < activeIndex) and -1 or 1
-                tg[pg] = side * (vpW + 24)
+                st.target = side * (vpW + 30)
             end
         end
     end
 
-    -- 已经跑着就不重复起循环
     if self._pageAnimConn then return end
 
+    -- ============================================================
+    -- 弹簧阻尼积分
+    --   每帧：a = k*(target - x) - c*v
+    --         v += a*dt
+    --         x += v*dt
+    --   优点：
+    --     · 有速度连续性 → 中途改目标不会突变，滑行自然接续
+    --     · 会「冲过头再回弹」，观感有重量感，不像死的指数插值
+    -- ============================================================
+    local K = 320      -- 弹簧刚度（越大越快）
+    local C = 26       -- 阻尼（越大越不晃）
+
     local conn
-    conn = RunService.RenderStepped:Connect(function()
+    conn = RunService.RenderStepped:Connect(function(dt)
         if self.Destroyed then
             if conn then pcall(function() conn:Disconnect() end) end
             self._pageAnimConn = nil
             return
         end
+        if dt > 0.05 then dt = 0.05 end
+        if dt <= 0 then dt = 1/60 end
 
         local busy = false
-        for pg, tgt in pairs(tg) do
+        for pg, st in pairs(anim) do
             if not pg or not pg.Parent then
-                tg[pg] = nil
+                anim[pg] = nil
             else
-                local cur = pg.Position.X.Offset
-                local diff = tgt - cur
-                if math.abs(diff) < 1 then
-                    pg.Position = UDim2.new(0, tgt, 0, 0)
-                    tg[pg] = nil
-                    -- 滑到屏幕外就隐藏，省渲染
-                    --   位置保持在屏幕外（明确状态），下次切回会重新摆到滑入起点
-                    if math.abs(tgt) > 10 then
+                local diff = st.target - st.x
+                -- 完全静止且到位 → 收工
+                if math.abs(diff) < 0.3 and math.abs(st.v) < 1.5 then
+                    if math.abs(st.x - st.target) > 0.01 then
+                        st.x = st.target
+                        st.v = 0
+                        pg.Position = UDim2.new(0, st.x, 0, 0)
+                    end
+                    -- 停在屏幕外就隐藏（但要保留 x 值，下次切回重新摆位）
+                    if math.abs(st.target) > 10 and pg.Visible then
                         pg.Visible = false
                     end
                 else
                     busy = true
-                    -- 指数趋近：每帧走 30%
-                    local nx = cur + diff * 0.30
-                    -- 最小步长，避免长尾拖沓
-                    if math.abs(nx - cur) < 2.2 then
-                        nx = cur + (diff > 0 and 2.2 or -2.2)
-                    end
-                    -- 不越过目标
-                    if (diff > 0 and nx > tgt) or (diff < 0 and nx < tgt) then
-                        nx = tgt
-                    end
+                    -- 弹簧积分（半隐式欧拉，稳定）
+                    local a = K * diff - C * st.v
+                    st.v = st.v + a * dt
+                    st.x = st.x + st.v * dt
                     pg.Visible = true
-                    pg.Position = UDim2.new(0, nx, 0, 0)
+                    pg.Position = UDim2.new(0, st.x, 0, 0)
                 end
             end
         end
@@ -4851,6 +4850,7 @@ function Window:SelectTab(index, instant)
     -- ============================================================
     for i, tt in ipairs(self.Tabs) do
         local isActive = (i == index)
+        local isLeaving = (i == last and not instant)
         for _, w in ipairs(tt.Widgets) do
             if w and w.Parent and w.Name ~= "ChildRow" and w.Name ~= "BodyChildRow" then
                 local base = w:GetAttribute("__baseH")
@@ -4861,16 +4861,16 @@ function Window:SelectTab(index, instant)
                         base = cur
                     end
                 end
-                w.Visible = isActive
-                if isActive and base and base > 0 then
+                -- 离开的页保持可见（滑出时有内容，不会看到空白滑动）
+                w.Visible = isActive or isLeaving
+                if (isActive or isLeaving) and base and base > 0 then
                     w.Size = UDim2.new(w.Size.X.Scale, w.Size.X.Offset, 0, base)
                 end
             end
         end
-        -- 子行按展开状态恢复
         for _, r in ipairs(self.ExpandRestorers) do
             if r.tab == tt and r.apply then
-                pcall(r.apply, isActive and r.get() == true or false, false)
+                pcall(r.apply, (isActive or isLeaving) and r.get() == true or false, false)
             end
         end
     end
