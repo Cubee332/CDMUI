@@ -677,6 +677,24 @@ UI.Layout = LAYOUT
 local CLICK_SFX = "rbxassetid://8617766509"
 
 -- 工具函数
+-- UTF-8 字符计数（Luau 的 # 返回字节数，中文一个字 3 字节）
+local function utf8Len(s)
+    s = tostring(s or "")
+    local count = 0
+    local i = 1
+    local n = #s
+    while i <= n do
+        local b = string.byte(s, i)
+        if not b then break end
+        if b < 0x80 then i = i + 1
+        elseif b < 0xE0 then i = i + 2
+        elseif b < 0xF0 then i = i + 3
+        else i = i + 4 end
+        count = count + 1
+    end
+    return count
+end
+
 local function mk(class, props, parent)
     local inst = Instance.new(class)
     if props then
@@ -2210,8 +2228,8 @@ local function createTopbarButton(self, labelText)
                 for _ = 1, 20 do
                     local conflict = false
                     for _, seg in ipairs(occupied) do
-                        -- 我们的占位 [x, x+90]，和 seg 重叠？
-                        if not (x + 90 < seg.x1 or x > seg.x2) then
+                        -- 我们的占位 [x, x+120]，和 seg 重叠？
+                        if not (x + 120 < seg.x1 or x > seg.x2) then
                             conflict = true
                             x = seg.x2 + 12
                             break
@@ -2249,7 +2267,9 @@ local function createTopbarButton(self, labelText)
 
             local bar = mk("Frame", {
                 Name = "TopbarBar",
+                -- 修复：宽度自适应内容，高度固定 44（和原生顶栏一致）
                 Size = UDim2.fromOffset(90, 44),
+                AutomaticSize = Enum.AutomaticSize.X,
                 Position = UDim2.fromOffset(posX, posY),
                 BackgroundTransparency = 1,
                 BorderSizePixel = 0,
@@ -2268,9 +2288,19 @@ local function createTopbarButton(self, labelText)
 
             -- 单个按钮：参数和原生完全一致
             local function makeBtn(parent, text, order, onClick)
+                -- 修复：按钮宽度按「字符数」自适应（不是字节数）
+                local textLen = utf8Len(text)
+                local isCJK = false
+                for i = 1, math.min(#text, 3) do
+                    local b = string.byte(text, i)
+                    if b and b >= 0xE4 then isCJK = true break end
+                end
+                local perChar = isCJK and 17 or 9
+                local btnW = math.max(90, math.min(textLen * perChar + 32, 220))
+
                 local w = mk("Frame", {
                     Name = "BtnWidget_" .. tostring(order),
-                    Size = UDim2.fromOffset(90, 44),
+                    Size = UDim2.fromOffset(btnW, 44),
                     BackgroundTransparency = 1,
                     BorderSizePixel = 0,
                     LayoutOrder = order,
@@ -2552,8 +2582,17 @@ local function createTopbarButton(self, labelText)
 
     local text = labelText or "控制面板"
 
-    -- 宽度照原版：90x44
-    local widgetW = 90
+    -- 修复：宽度按「字符数」自适应（不是字节数）
+    --   原生参考：设置(2字)=54, 更新内容(4字)=76
+    --   规律：中文约 17px/字 + 内边距 ~8px
+    local textLen = utf8Len(text)
+    local isCJK = false
+    for i = 1, math.min(#text, 3) do
+        local b = string.byte(text, i)
+        if b and b >= 0xE4 then isCJK = true break end
+    end
+    local perChar = isCJK and 17 or 9
+    local widgetW = math.max(44, math.min(textLen * perChar + 10, 160))
 
     -- 先清掉可能残留的旧按钮，避免两个叠在一起 / 透明度被上一个动画带坏
     local oldWidget = left:FindFirstChild("CDMUIWidget")
