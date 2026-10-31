@@ -4370,7 +4370,7 @@ function Window:_ShowButtonGuide()
         AnchorPoint = Vector2.new(0.5, 0),
         BackgroundTransparency = 0.3,
         BackgroundColor3 = T.panel,
-        Text = "点击这里打开",
+        Text = "点击这里打开",   -- 电脑和手机统一
         TextColor3 = T.text,
         Font = FONT_BOLD,
         TextSize = LAYOUT.rowDesc + 2,
@@ -4430,23 +4430,27 @@ function Window:_ShowButtonGuide()
     local function sync()
         if not guideGui.Parent then return end
 
-        -- 移动端：不跟按钮，固定顶部中央提示点击左上角
-        if isMobile then
+        -- 修复：手机端也用和电脑端一样的逻辑（框住按钮 + 贴下方提示）
+        --   之前手机端固定到屏幕中央，和电脑端完全不一致
+
+        -- 手机兜底：按钮被折叠进菜单（不可见）时，用顶栏左上角区域提示
+        if isMobile and btn and btn.Parent and not btn.Visible then
             local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
-            ring.Position = UDim2.fromOffset(vp.X / 2, 90)
-            pulse.Position = UDim2.fromOffset(vp.X / 2, 90)
-            pulse.Size = UDim2.fromOffset(0, 0)
+            local bx, by = 48, 28   -- 左上角汉堡菜单按钮大致位置
+            ring.Position = UDim2.fromOffset(bx, by)
+            ring.Size = UDim2.fromOffset(44, 44)
+            pulse.Position = UDim2.fromOffset(bx, by)
+            pulse.Size = UDim2.fromOffset(44, 44)
             tip.AnchorPoint = Vector2.new(0.5, 0)
-            tip.Text = "点左上角 ≡ 打开菜单"
+            tip:SetAttribute("__bx", bx + 60)
+            tip:SetAttribute("__by", by + 26)
             arrow.AnchorPoint = Vector2.new(0.5, 1)
             arrow.Rotation = 0
-            arrow:SetAttribute("__bx", vp.X / 2)
-            arrow:SetAttribute("__by", 106)
-            tip:SetAttribute("__bx", vp.X / 2)
-            tip:SetAttribute("__by", 108)
+            arrow:SetAttribute("__bx", bx)
+            arrow:SetAttribute("__by", by + 26)
             local off0 = bounceOffset()
-            arrow.Position = UDim2.fromOffset(vp.X / 2, 106 - off0)
-            tip.Position = UDim2.fromOffset(vp.X / 2, 108 - off0)
+            arrow.Position = UDim2.fromOffset(bx, by + 26 - off0)
+            tip.Position = UDim2.fromOffset(bx + 60, by + 26 - off0)
             return
         end
 
