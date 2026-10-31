@@ -5606,6 +5606,9 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
     local anim = self._pageAnim
 
     -- 初始化每个页的运动状态
+    -- 修复：切页时强制把所有非活动页「瞬间」移到屏幕外
+    --   之前只设 target，如果上次动画没跑完（st.x 不在屏幕外），
+    --   两个页面会重叠一段时间才分开
     for i, tt in ipairs(self.Tabs) do
         local pg = tt.Page
         if pg then
@@ -5618,17 +5621,30 @@ function Window:_SetPageTargets(activeIndex, dir, vpW)
             end
 
             if i == activeIndex then
+                -- 活动页：目标是 0（居中）
                 st.target = 0
                 pg.Visible = true
-                -- 新页：如果完全静止在中间，摆到滑入起点
+                -- 如果不在屏幕外，摆到滑入起点
                 if math.abs(st.x) <= 1 and math.abs(st.v) < 1 then
                     st.x = dir * (vpW + 30)
                     st.v = 0
                     pg.Position = UDim2.new(0, st.x, 0, 0)
                 end
             else
+                -- 非活动页：目标是屏幕外
                 local side = (i < activeIndex) and -1 or 1
-                st.target = side * (vpW + 30)
+                local offX = side * (vpW + 30)
+                st.target = offX
+
+                -- 修复：如果这一页当前就在屏幕内（上次没滑出去），
+                --   说明会和新页重叠 → 强制吸附到屏幕外
+                if math.abs(st.x) < vpW * 0.5 then
+                    st.x = offX
+                    st.v = 0
+                    pg.Position = UDim2.new(0, offX, 0, 0)
+                    pg.Visible = false
+                end
+                -- 否则保持当前状态，让它自然滑出（有动画）
             end
         end
     end
